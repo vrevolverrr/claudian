@@ -396,7 +396,12 @@ export class AgyExecutionSession implements ProviderExecutionSession {
   private async shutdownProcess(): Promise<void> {
     const process = this.process;
     if (!process) return;
+    // Both are captured before awaiting: by the time shutdown resolves the
+    // session may already own a newer turn, and settling that one would end
+    // its flight early while leaving this turn's flight pending forever.
+    const settle = this.settleActiveTurn;
     this.process = null;
+    this.settleActiveTurn = null;
     try {
       await process.shutdown();
     } catch {
@@ -404,7 +409,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     } finally {
       // A process killed past its final shutdown timeout never notifies its
       // exit listeners, so the turn is settled here rather than waiting on one.
-      this.settleActiveTurn?.();
+      settle?.();
     }
   }
 

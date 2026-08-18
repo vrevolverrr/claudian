@@ -5,6 +5,7 @@ import {
   AgyEventNormalizer,
   type AgyNormalizedEvent,
 } from '@/providers/agy/normalization/agyEventNormalization';
+import type { AgyStreamEvent } from '@/providers/agy/runtime/agyStream';
 import { parseAgyStreamLine } from '@/providers/agy/runtime/agyStream';
 
 const FIXTURE_DIR = path.join(__dirname, '../../../fixtures/agy');
@@ -108,5 +109,31 @@ describe('AgyEventNormalizer', () => {
       expect(parseAgyStreamLine('{"event":"future_event"}')).toBeNull();
       expect(parseAgyStreamLine('{"event":"step_update"}')).toBeNull();
     });
+  });
+});
+
+describe('AgyEventNormalizer usage source', () => {
+  it('ignores a checkpoint step that lands after the last agent response', () => {
+    const normalizer = new AgyEventNormalizer();
+    const step = (stepType: string, total: number): AgyStreamEvent => ({
+      event: 'step_update',
+      step_update: {
+        state: 'DONE',
+        step_index: total,
+        step_type: stepType,
+        usage: { input_tokens: total, total_tokens: total },
+      },
+    });
+
+    normalizer.next(step('agent_response', 6240));
+    normalizer.next(step('checkpoint', 123));
+    const events = normalizer.next({
+      event: 'result',
+      result: { status: 'SUCCESS', usage: { total_tokens: 20196 } },
+    });
+
+    const usage = events.find((event) => event.type === 'usage_updated');
+    expect(usage && usage.type === 'usage_updated' && usage.usage.contextTokens)
+      .toBe(6240);
   });
 });

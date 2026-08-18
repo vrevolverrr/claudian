@@ -66,9 +66,13 @@ export class AgyEventNormalizer {
 
   private normalizeStep(step: AgyStepUpdate): AgyNormalizedEvent[] {
     this.conversationId = step.conversation_id ?? this.conversationId;
-    // Step usage describes the context at that step. The terminal result sums
+    // Step usage describes the context at that step; the terminal result sums
     // every step instead, which overstates context by the length of the turn.
-    if (step.usage) this.latestStepUsage = step.usage;
+    // Only agent_response steps measure the conversation: a checkpoint step is
+    // a small side-call whose totals would collapse the meter.
+    if (step.step_type === 'agent_response' && step.usage) {
+      this.latestStepUsage = step.usage;
+    }
 
     if (step.step_type === 'tool') {
       return this.normalizeToolStep(step);
