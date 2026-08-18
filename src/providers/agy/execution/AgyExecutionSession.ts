@@ -31,7 +31,7 @@ import {
   buildContextFromHistory,
   buildPromptWithHistoryContext,
 } from '../../../utils/session';
-import { decodeAgyModelId } from '../models';
+import { decodeAgyModelId, resolveAgyContextWindow } from '../models';
 import { AgyEventNormalizer } from '../normalization/agyEventNormalization';
 import { AgyCliResolver } from '../runtime/AgyCliResolver';
 import {
@@ -306,7 +306,10 @@ export class AgyExecutionSession implements ProviderExecutionSession {
           : {}),
       });
 
-      const normalizer = new AgyEventNormalizer({ model });
+      const normalizer = new AgyEventNormalizer({
+        contextWindow: resolveContextWindow(settings, model),
+        model,
+      });
 
       await this.streamTurn(active, launchSpec, normalizer);
     } catch (error) {
@@ -630,6 +633,28 @@ export function buildAgyPrompt(
   }
 
   return prompt;
+}
+
+/**
+ * The meter shows this window until the model changes, so it is resolved the
+ * same way the model selector resolves it: a per-model limit from settings
+ * first, then the family default.
+ */
+function resolveContextWindow(
+  settings: Record<string, unknown>,
+  rawModelId: string | null,
+): number {
+  if (!rawModelId) return resolveAgyContextWindow('');
+
+  const limits = settings.customContextLimits;
+  const configured = isRecord(limits) ? limits[rawModelId] : undefined;
+  return typeof configured === 'number' && configured > 0
+    ? configured
+    : resolveAgyContextWindow(rawModelId);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function buildAgyEnvironment(

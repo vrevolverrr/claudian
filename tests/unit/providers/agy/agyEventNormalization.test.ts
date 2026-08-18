@@ -12,7 +12,10 @@ const FIXTURE_DIR = path.join(__dirname, '../../../fixtures/agy');
 
 function replay(fixture: string): AgyNormalizedEvent[] {
   const raw = fs.readFileSync(path.join(FIXTURE_DIR, fixture), 'utf8');
-  const normalizer = new AgyEventNormalizer({ model: 'gemini-3-pro' });
+  const normalizer = new AgyEventNormalizer({
+    contextWindow: 1_000_000,
+    model: 'gemini-3-pro',
+  });
 
   return raw
     .split('\n')
@@ -114,7 +117,7 @@ describe('AgyEventNormalizer', () => {
 
 describe('AgyEventNormalizer usage source', () => {
   it('ignores a checkpoint step that lands after the last agent response', () => {
-    const normalizer = new AgyEventNormalizer();
+    const normalizer = new AgyEventNormalizer({ contextWindow: 200_000 });
     const step = (stepType: string, total: number): AgyStreamEvent => ({
       event: 'step_update',
       step_update: {
@@ -135,5 +138,9 @@ describe('AgyEventNormalizer usage source', () => {
     const usage = events.find((event) => event.type === 'usage_updated');
     expect(usage && usage.type === 'usage_updated' && usage.usage.contextTokens)
       .toBe(6240);
+    // The window travels with the event: nothing downstream recomputes it
+    // until the user changes model.
+    expect(usage && usage.type === 'usage_updated' && usage.usage.contextWindow)
+      .toBe(200_000);
   });
 });

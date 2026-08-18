@@ -1,16 +1,18 @@
 import type { UsageInfo } from '../../../core/types';
 import type { AgyUsage } from './agyStream';
 
-const FALLBACK_CONTEXT_WINDOW = 1_000_000;
-
 /**
  * agy reports per-step token counts and no context window, so the window is a
  * local heuristic and is never marked authoritative.
+ *
+ * The window is required rather than defaulted: the usage this returns is what
+ * the meter displays until the model changes, so a placeholder here would be
+ * shown to the user rather than corrected downstream.
  */
 export function buildAgyUsageInfo(
   usage: AgyUsage | undefined,
   model: string | null,
-  contextWindow = FALLBACK_CONTEXT_WINDOW,
+  contextWindow: number,
 ): UsageInfo | null {
   if (!usage) return null;
 

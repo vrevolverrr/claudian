@@ -29,7 +29,7 @@ export type AgyNormalizedEvent =
 
 export interface AgyNormalizerOptions {
   readonly model?: string | null;
-  readonly contextWindow?: number;
+  readonly contextWindow: number;
 }
 
 /**
@@ -46,7 +46,7 @@ export class AgyEventNormalizer {
   private latestStepUsage: AgyUsage | null = null;
   private readonly startedToolNames = new Map<number, string>();
 
-  constructor(private readonly options: AgyNormalizerOptions = {}) {}
+  constructor(private readonly options: AgyNormalizerOptions) {}
 
   getConversationId(): string | null {
     return this.conversationId;
