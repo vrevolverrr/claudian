@@ -28,6 +28,22 @@ export class AgyModelDiscoveryService {
     private readonly cliResolver = new AgyCliResolver(),
   ) {}
 
+  /**
+   * Discovery for the settings pane, which is rendered only after this
+   * resolves. `agy models` takes seconds, so it runs only when it can change
+   * something: the provider is on and no catalog has been read yet. The
+   * explicit refresh control calls `refresh()` and always shells out.
+   */
+  async ensureFresh(): Promise<AgyModelDiscoveryResult> {
+    const settings = this.host.settings as unknown as Record<string, unknown>;
+    const agySettings = getAgyProviderSettings(settings);
+    if (!agySettings.enabled || agySettings.discoveredModels.length > 0) {
+      return { changed: false, models: [...agySettings.discoveredModels] };
+    }
+
+    return this.refresh();
+  }
+
   async refresh(): Promise<AgyModelDiscoveryResult> {
     const settings = this.host.settings as unknown as Record<string, unknown>;
     const cliPath = this.cliResolver.resolveFromSettings(settings);

@@ -26,10 +26,9 @@ export function createAgyWorkspaceServices(plugin: ProviderHost): AgyWorkspaceSe
     settingsTabRenderer: agySettingsTabRenderer,
     refreshModelCatalog: () => discoveryService.refresh(),
     async prepareSettings(): Promise<void> {
-      // A stale catalog is better than a settings pane that waits on a
-      // subprocess, so discovery failures stay silent here and surface on the
-      // explicit refresh instead.
-      await discoveryService.refresh();
+      // The settings pane does not render until this resolves, so discovery
+      // failures stay silent here and surface on the explicit refresh instead.
+      await discoveryService.ensureFresh();
     },
   };
 }
