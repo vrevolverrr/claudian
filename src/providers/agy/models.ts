@@ -1,7 +1,26 @@
 export const AGY_MODEL_PREFIX = 'agy:';
 
-/** agy's default context window, used until a model reports its own. */
-export const AGY_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+/** Fallback for a model whose family is not recognised. */
+export const AGY_DEFAULT_CONTEXT_WINDOW = 200_000;
+
+/**
+ * Context window per model family.
+ *
+ * agy reports no window of its own — its usage records carry token counts and
+ * nothing else — so these are published figures for the underlying models, not
+ * values agy confirmed. They are only used to scale the context meter, and the
+ * per-model context limits in settings override any of them.
+ */
+const CONTEXT_WINDOWS: ReadonlyArray<readonly [string, number]> = Object.freeze([
+  ['gemini-', 1_000_000],
+  ['claude-', 200_000],
+  ['gpt-oss-', 128_000],
+]);
+
+export function resolveAgyContextWindow(rawModelId: string): number {
+  const match = CONTEXT_WINDOWS.find(([prefix]) => rawModelId.startsWith(prefix));
+  return match ? match[1] : AGY_DEFAULT_CONTEXT_WINDOW;
+}
 
 export interface AgyModel {
   readonly id: string;

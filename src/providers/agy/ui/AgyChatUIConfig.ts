@@ -10,6 +10,7 @@ import {
   encodeAgyModelId,
   getEffectiveAgyModels,
   isAgyModelSelectionId,
+  resolveAgyContextWindow,
 } from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
 
@@ -36,15 +37,12 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
     );
   },
 
-  applyPermissionMode(): void {
-    // Permission mode is read from the shared setting at launch time; agy keeps
-    // no mode of its own between turns.
-  },
-
   getContextWindowSize(model, customLimits): number {
     const rawId = decodeAgyModelId(model);
-    const configured = rawId ? customLimits?.[rawId] : undefined;
-    return configured && configured > 0 ? configured : AGY_DEFAULT_CONTEXT_WINDOW;
+    if (!rawId) return AGY_DEFAULT_CONTEXT_WINDOW;
+
+    const configured = customLimits?.[rawId];
+    return configured && configured > 0 ? configured : resolveAgyContextWindow(rawId);
   },
 
   getCustomModelIds(): Set<string> {
@@ -102,5 +100,10 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
 
   ownsModel(model): boolean {
     return isAgyModelSelectionId(model);
+  },
+
+  resolvePermissionMode(settings): string {
+    if (settings.permissionMode === 'plan') return 'plan';
+    return settings.permissionMode === 'yolo' ? 'yolo' : 'normal';
   },
 };

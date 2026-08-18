@@ -1,6 +1,13 @@
 import type { ProviderHost } from '@/core/providers/ProviderHost';
-import { decodeAgyModelId, encodeAgyModelId, parseAgyModelCatalog } from '@/providers/agy/models';
+import {
+  AGY_DEFAULT_CONTEXT_WINDOW,
+  decodeAgyModelId,
+  encodeAgyModelId,
+  parseAgyModelCatalog,
+  resolveAgyContextWindow,
+} from '@/providers/agy/models';
 import { AgyModelDiscoveryService } from '@/providers/agy/runtime/AgyModelDiscoveryService';
+import { agyChatUIConfig } from '@/providers/agy/ui/AgyChatUIConfig';
 
 function makeHost(agyConfig: Record<string, unknown>): ProviderHost {
   return {
@@ -66,5 +73,35 @@ describe('agy model selection ids', () => {
     // agy's own catalog contains claude-sonnet-4-6, so a bare id is ambiguous.
     expect(decodeAgyModelId('claude-sonnet-4-6')).toBeNull();
     expect(decodeAgyModelId('pi:anthropic/claude-sonnet-4-6')).toBeNull();
+  });
+});
+
+describe('agy context windows', () => {
+  it('scales the meter per model family, not one flat number', () => {
+    expect(resolveAgyContextWindow('gemini-3.1-pro-high')).toBe(1_000_000);
+    expect(resolveAgyContextWindow('claude-sonnet-4-6')).toBe(200_000);
+    expect(resolveAgyContextWindow('gpt-oss-120b-medium')).toBe(128_000);
+    expect(resolveAgyContextWindow('some-future-model')).toBe(AGY_DEFAULT_CONTEXT_WINDOW);
+  });
+
+  it('lets a configured per-model limit win', () => {
+    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {
+      'claude-sonnet-4-6': 1_000_000,
+    })).toBe(1_000_000);
+    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {})).toBe(200_000);
+  });
+});
+
+describe('agy permission mode', () => {
+  it('does not override the shared permission mode write', () => {
+    // TabRuntimeUI writes settings.permissionMode itself unless the provider
+    // supplies applyPermissionMode; supplying a no-op froze the toggle.
+    expect(agyChatUIConfig.applyPermissionMode).toBeUndefined();
+  });
+
+  it('projects the shared mode back when switching providers', () => {
+    expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'yolo' })).toBe('yolo');
+    expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'plan' })).toBe('plan');
+    expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'anything' })).toBe('normal');
   });
 });
