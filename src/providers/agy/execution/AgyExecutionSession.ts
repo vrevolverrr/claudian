@@ -72,6 +72,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
   private disposalPromise: Promise<void> | null = null;
   private disposed = false;
   private process: ManagedStdioProcess | null = null;
+  private settleActiveTurn: (() => void) | null = null;
   private providerSessionId: string | null;
   private readonly runFlights = new Set<Promise<void>>();
   private revision = 0;
@@ -132,7 +133,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     this.emitRequestedState(active);
     active.abortController.abort();
     void this.shutdownProcess();
-    this.setStatus('idle');
     this.finishRequested(active, { reason: 'Cancelled', type: 'cancelled' });
   }
 
@@ -214,77 +214,90 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     active: ActiveRun,
     request: ProviderExecutionRequest,
   ): Promise<void> {
-    const settings = this.host.settings as unknown as Record<string, unknown>;
-    const cliPath = this.cliResolver.resolveFromSettings(settings);
-    if (!cliPath) {
+    try {
+      const settings = this.host.settings as unknown as Record<string, unknown>;
+      const cliPath = this.cliResolver.resolveFromSettings(settings);
+      if (!cliPath) {
+        this.finishRequested(active, {
+          category: 'configuration',
+          message: 'The agy CLI was not found. Set its path in Claudian settings.',
+          recoverable: true,
+          type: 'execution_error',
+        });
+        return;
+      }
+
+      // agy replays its own conversation when --conversation is passed, so the
+      // transcript is inlined only for a conversation agy has never seen.
+      const prompt = buildAgyPrompt(request, !this.providerSessionId);
+      if (!prompt) {
+        this.finishRequested(active, {
+          category: 'configuration',
+          message: 'agy requires prompt text.',
+          recoverable: true,
+          type: 'execution_error',
+        });
+        return;
+      }
+
+      this.emitRequested(active, { accepted: true, type: 'turn_started' });
+      this.emitRequested(active, {
+        content: prompt,
+        type: 'user_message_started',
+      });
+
+      if (request.input.some((block) => block.type === 'image')) {
+        this.emitRequested(active, {
+          level: 'warning',
+          message: 'agy print mode accepts text only; attached images were not sent.',
+          type: 'notice',
+        });
+      }
+
+      const permissionFlags = resolveAgyPermissionFlags(request);
+      if (permissionFlags.approvalsUnavailable && !this.warnedAboutNonInteractivePermissions) {
+        this.warnedAboutNonInteractivePermissions = true;
+        this.emitRequested(active, {
+          level: 'warning',
+          message: 'agy cannot ask for approval in this mode, so it denies edits and '
+            + 'commands instead of prompting. Switch to yolo mode to let them run.',
+          type: 'notice',
+        });
+      }
+
+      const providerSettings = getAgyProviderSettings(settings);
+      const launchSpec = buildAgyLaunchSpec({
+        cliPath,
+        ...(this.providerSessionId ? { conversationId: this.providerSessionId } : {}),
+        env: buildAgyEnvironment(settings, cliPath),
+        ...(permissionFlags.mode ? { mode: permissionFlags.mode } : {}),
+        ...(request.configuration.model ? { model: request.configuration.model } : {}),
+        prompt,
+        ...(request.configuration.reasoning
+          ? { reasoning: request.configuration.reasoning }
+          : {}),
+        skipPermissions: permissionFlags.skipPermissions,
+        vaultWorkingDirectory: this.config.vaultWorkingDirectory,
+        ...(request.configuration.externalWorkspaceRoots
+          ? { externalWorkspaceRoots: request.configuration.externalWorkspaceRoots }
+          : {}),
+      });
+
+      const normalizer = new AgyEventNormalizer({
+        model: request.configuration.model ?? providerSettings.selectedModel ?? null,
+      });
+
+      await this.streamTurn(active, launchSpec, normalizer);
+    } catch (error) {
+      // A failure while preparing the turn must still terminate the run
+      // stream; an unterminated run blocks the consumer and the session.
       this.finishRequested(active, {
-        category: 'configuration',
-        message: 'The agy CLI was not found. Set its path in Claudian settings.',
+        category: 'unknown',
+        message: `agy could not start the turn: ${toMessage(error)}`,
         recoverable: true,
         type: 'execution_error',
       });
-      return;
     }
-
-    const prompt = buildAgyPrompt(request);
-    if (!prompt) {
-      this.finishRequested(active, {
-        category: 'configuration',
-        message: 'agy requires prompt text.',
-        recoverable: true,
-        type: 'execution_error',
-      });
-      return;
-    }
-
-    this.emitRequested(active, { accepted: true, type: 'turn_started' });
-    this.emitRequested(active, {
-      content: prompt,
-      type: 'user_message_started',
-    });
-
-    if (request.input.some((block) => block.type === 'image')) {
-      this.emitRequested(active, {
-        level: 'warning',
-        message: 'agy print mode accepts text only; attached images were not sent.',
-        type: 'notice',
-      });
-    }
-
-    const permissionFlags = resolveAgyPermissionFlags(request);
-    if (permissionFlags.approvalsUnavailable && !this.warnedAboutNonInteractivePermissions) {
-      this.warnedAboutNonInteractivePermissions = true;
-      this.emitRequested(active, {
-        level: 'warning',
-        message: 'agy cannot ask for approval in this mode, so it denies edits and '
-          + 'commands instead of prompting. Switch to yolo mode to let them run.',
-        type: 'notice',
-      });
-    }
-
-    const providerSettings = getAgyProviderSettings(settings);
-    const launchSpec = buildAgyLaunchSpec({
-      cliPath,
-      ...(this.providerSessionId ? { conversationId: this.providerSessionId } : {}),
-      env: buildAgyEnvironment(settings, cliPath),
-      ...(permissionFlags.mode ? { mode: permissionFlags.mode } : {}),
-      ...(request.configuration.model ? { model: request.configuration.model } : {}),
-      prompt,
-      ...(request.configuration.reasoning
-        ? { reasoning: request.configuration.reasoning }
-        : {}),
-      skipPermissions: permissionFlags.skipPermissions,
-      vaultWorkingDirectory: this.config.vaultWorkingDirectory,
-      ...(request.configuration.externalWorkspaceRoots
-        ? { externalWorkspaceRoots: request.configuration.externalWorkspaceRoots }
-        : {}),
-    });
-
-    const normalizer = new AgyEventNormalizer({
-      model: request.configuration.model ?? providerSettings.selectedModel ?? null,
-    });
-
-    await this.streamTurn(active, launchSpec, normalizer);
   }
 
   private streamTurn(
@@ -303,8 +316,10 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       const settle = (): void => {
         if (settled) return;
         settled = true;
+        this.settleActiveTurn = null;
         resolve();
       };
+      this.settleActiveTurn = settle;
 
       const consumeLine = (line: string): void => {
         const streamEvent = parseAgyStreamLine(line);
@@ -314,7 +329,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
           if (!this.isActive(active)) return;
           if (event.type === 'turn_completed' || event.type === 'execution_error') {
             this.captureConversationId(normalizer, active);
-            this.setStatus('idle');
             this.finishRequested(active, event);
             void this.shutdownProcess();
             settle();
@@ -326,7 +340,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
 
       process.onError((error) => {
         if (this.isActive(active)) {
-          this.setStatus('idle');
           this.finishRequested(active, {
             category: 'transport',
             message: `agy could not be started: ${error.message}`,
@@ -340,7 +353,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       process.onExit(({ code, signal }) => {
         this.captureConversationId(normalizer, active);
         if (this.isActive(active)) {
-          this.setStatus('idle');
           this.finishRequested(active, {
             category: 'process-exited',
             message: formatUnexpectedExit(code, signal, process.getStderrSnapshot()),
@@ -357,7 +369,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         process.stdin.end();
       } catch (error) {
         if (this.isActive(active)) {
-          this.setStatus('idle');
           this.finishRequested(active, {
             category: 'transport',
             message: `agy could not be started: ${toMessage(error)}`,
@@ -390,6 +401,10 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       await process.shutdown();
     } catch {
       // A turn process that will not stop cannot block session cleanup.
+    } finally {
+      // A process killed past its final shutdown timeout never notifies its
+      // exit listeners, so the turn is settled here rather than waiting on one.
+      this.settleActiveTurn?.();
     }
   }
 
@@ -398,6 +413,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     event: WithoutScope<ProviderExecutionEvent>,
   ): void {
     if (active.terminal) return;
+    if (!this.disposed) this.setStatus('idle');
     this.emitRequested(active, event);
     active.terminal = true;
     active.requestSignal.removeEventListener('abort', active.onRequestAbort);
@@ -501,7 +517,10 @@ export function resolveAgyPermissionFlags(
   }
 }
 
-export function buildAgyPrompt(request: ProviderExecutionRequest): string {
+export function buildAgyPrompt(
+  request: ProviderExecutionRequest,
+  replayHistory: boolean,
+): string {
   const text = request.input
     .filter((block): block is { readonly type: 'text'; readonly text: string } =>
       block.type === 'text')
@@ -522,10 +541,8 @@ export function buildAgyPrompt(request: ProviderExecutionRequest): string {
     prompt = appendContextFiles(prompt, [...externalPaths]);
   }
 
-  // agy replays its own conversation when --conversation is passed. History is
-  // only inlined for a conversation agy has never seen.
   const history = request.conversationHistory;
-  if (history && history.length > 0 && !request.configuration.mode) {
+  if (replayHistory && history && history.length > 0) {
     const messages = [...history] as ChatMessage[];
     prompt = buildPromptWithHistoryContext(
       buildContextFromHistory(messages),
@@ -549,7 +566,7 @@ function buildAgyEnvironment(
   return {
     ...process.env,
     ...configured,
-    PATH: getEnhancedPath(process.env.PATH, cliPath),
+    PATH: getEnhancedPath(configured.PATH, cliPath),
   };
 }
 

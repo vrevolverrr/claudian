@@ -7,7 +7,7 @@ import type {
   ProviderTurnCompletedEvent,
   ProviderUsageUpdatedEvent,
 } from '../../../core/execution';
-import type { AgyStepUpdate, AgyStreamEvent } from '../runtime/agyStream';
+import type { AgyStepUpdate, AgyStreamEvent, AgyUsage } from '../runtime/agyStream';
 import { buildAgyUsageInfo } from '../runtime/buildAgyUsageInfo';
 import { normalizeAgyToolInput, normalizeAgyToolName } from './agyToolNormalization';
 
@@ -43,6 +43,7 @@ export interface AgyNormalizerOptions {
 export class AgyEventNormalizer {
   private assistantAnnounced = false;
   private conversationId: string | null = null;
+  private latestStepUsage: AgyUsage | null = null;
   private readonly startedToolNames = new Map<number, string>();
 
   constructor(private readonly options: AgyNormalizerOptions = {}) {}
@@ -65,6 +66,9 @@ export class AgyEventNormalizer {
 
   private normalizeStep(step: AgyStepUpdate): AgyNormalizedEvent[] {
     this.conversationId = step.conversation_id ?? this.conversationId;
+    // Step usage describes the context at that step. The terminal result sums
+    // every step instead, which overstates context by the length of the turn.
+    if (step.usage) this.latestStepUsage = step.usage;
 
     if (step.step_type === 'tool') {
       return this.normalizeToolStep(step);
@@ -87,7 +91,9 @@ export class AgyEventNormalizer {
   }
 
   private normalizeToolStep(step: AgyStepUpdate): AgyNormalizedEvent[] {
-    const agyToolName = step.tool_name ?? step.tool_info?.name;
+    const agyToolName = step.tool_name
+      ?? step.tool_info?.name
+      ?? this.startedToolNames.get(step.step_index);
     if (!agyToolName) return [];
 
     const toolCallId = `agy-step-${step.step_index}`;
@@ -103,6 +109,7 @@ export class AgyEventNormalizer {
       }];
     }
 
+    this.startedToolNames.delete(step.step_index);
     const isError = step.state === 'ERROR' || step.tool_info?.error !== undefined;
     const content = isError
       ? step.tool_info?.error?.message ?? 'agy reported a tool error.'
@@ -125,7 +132,7 @@ export class AgyEventNormalizer {
 
     const events: AgyNormalizedEvent[] = [];
     const usage = buildAgyUsageInfo(
-      result.usage,
+      this.latestStepUsage ?? result.usage,
       this.options.model ?? null,
       this.options.contextWindow,
     );
@@ -134,6 +141,15 @@ export class AgyEventNormalizer {
     }
 
     if (result.status === 'SUCCESS') {
+      // agy can complete an agent_response step without ever emitting a delta.
+      // The result then holds the only copy of the answer.
+      if (!this.assistantAnnounced && result.response) {
+        this.assistantAnnounced = true;
+        events.unshift(
+          { type: 'assistant_message_started' },
+          { text: result.response, type: 'text_delta' },
+        );
+      }
       events.push({ reason: 'completed', type: 'turn_completed' });
       return events;
     }

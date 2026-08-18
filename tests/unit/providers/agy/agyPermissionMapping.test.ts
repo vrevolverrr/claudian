@@ -108,13 +108,25 @@ describe('buildAgyPrompt', () => {
   it('returns empty for an image-only prompt so the turn fails loudly', () => {
     expect(buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
       input: [],
-    }))).toBe('');
+    }), true)).toBe('');
+  });
+
+  it('replays the transcript only for a conversation agy has never seen', () => {
+    const withHistory = makeRequest('yolo', { kind: 'provider-default' }, {
+      conversationHistory: [
+        { content: 'what did I write yesterday', id: '1', role: 'user', timestamp: 0 },
+        { content: 'a note about otters', id: '2', role: 'assistant', timestamp: 1 },
+      ],
+    });
+
+    expect(buildAgyPrompt(withHistory, true)).toContain('otters');
+    expect(buildAgyPrompt(withHistory, false)).not.toContain('otters');
   });
 
   it('appends the current note path', () => {
     const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
       context: { currentNote: { path: 'Daily/2026-08-18.md' } },
-    }));
+    }), true);
 
     expect(prompt).toContain('summarize my notes');
     expect(prompt).toContain('Daily/2026-08-18.md');

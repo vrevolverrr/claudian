@@ -72,11 +72,13 @@ describe('AgyEventNormalizer', () => {
       expect(ofType(events, 'execution_error')).toHaveLength(0);
     });
 
-    it('reports usage from the terminal result', () => {
+    it('reports context from the newest step, not the summed turn', () => {
       const usage = ofType(events, 'usage_updated');
 
       expect(usage).toHaveLength(1);
-      expect(usage[0].usage.inputTokens).toBeGreaterThan(0);
+      // Last agent_response step: total 6240. Result sums every step: 20196.
+      expect(usage[0].usage.contextTokens).toBe(6240);
+      expect(usage[0].usage.inputTokens).toBe(5723);
       expect(usage[0].usage.contextWindowIsAuthoritative).toBe(false);
     });
   });
