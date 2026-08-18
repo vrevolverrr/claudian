@@ -32,9 +32,7 @@ import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
 import { buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
 import { parseAgyStreamLine } from '../runtime/agyStream';
 import { getAgyProviderSettings } from '../settings';
-
-/** agy's own conversation identity, reused across turns via --conversation. */
-const AGY_CONVERSATION_STATE_KEY = 'agyConversationId';
+import { AGY_CONVERSATION_STATE_KEY, getAgyState } from '../types';
 
 const STDERR_BUFFER_LIMIT = 8_000;
 
@@ -89,9 +87,8 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     private readonly config: ProviderSessionConfig,
   ) {
     const seed = config.resumeSeed;
-    const seededConversationId = seed?.providerSessionId
-      ?? readString(seed?.providerState?.[AGY_CONVERSATION_STATE_KEY]);
-    this.providerSessionId = seededConversationId ?? null;
+    this.providerSessionId = seed?.providerSessionId
+      ?? getAgyState(seed?.providerState).conversationId;
   }
 
   execute(request: ProviderExecutionRequest): ProviderExecutionRun {
@@ -585,10 +582,6 @@ function formatUnexpectedExit(
   return detail
     ? `agy exited (${reason}) before finishing the turn: ${detail}`
     : `agy exited (${reason}) before finishing the turn.`;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function toMessage(error: unknown): string {
