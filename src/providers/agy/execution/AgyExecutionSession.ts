@@ -727,6 +727,19 @@ function buildAgyEnvironment(
   };
 }
 
+/**
+ * agy takes its prompt as a command-line argument and offers no stdin path, so
+ * an oversized prompt fails at spawn with an errno the user cannot act on.
+ */
+function describeLaunchFailure(error: unknown): string {
+  if (error !== null && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'E2BIG') {
+    return 'This conversation is too large to send to agy, which takes its '
+      + 'prompt as a command-line argument. Start a new conversation to continue.';
+  }
+  return `agy could not be started: ${toMessage(error)}`;
+}
+
 function formatUnexpectedExit(
   code: number | null,
   signal: NodeJS.Signals | null,

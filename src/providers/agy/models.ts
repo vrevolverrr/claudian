@@ -1,20 +1,20 @@
 export const AGY_MODEL_PREFIX = 'agy:';
 
 /** Fallback for a model whose family is not recognised. */
-export const AGY_DEFAULT_CONTEXT_WINDOW = 200_000;
+export const AGY_DEFAULT_CONTEXT_WINDOW = 250_000;
 
 /**
- * Context window per model family.
+ * Context window per model family, as agy serves them.
  *
- * agy reports no window of its own — its usage records carry token counts and
- * nothing else — so these are published figures for the underlying models, not
- * values agy confirmed. They are only used to scale the context meter, and the
- * per-model context limits in settings override any of them.
+ * agy's stream carries token counts and no window, so these cannot be read at
+ * runtime; they are the limits agy reports for its own models rather than the
+ * underlying models' published figures, which differ. The per-model context
+ * limits in settings override any of them.
  */
 const CONTEXT_WINDOWS: ReadonlyArray<readonly [string, number]> = Object.freeze([
   ['gemini-', 1_000_000],
-  ['claude-', 200_000],
-  ['gpt-oss-', 128_000],
+  ['claude-', 250_000],
+  ['gpt-oss-', 131_072],
 ]);
 
 export function resolveAgyContextWindow(rawModelId: string): number {

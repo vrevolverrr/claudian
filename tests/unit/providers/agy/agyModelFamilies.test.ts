@@ -109,7 +109,7 @@ describe('agyChatUIConfig model and effort split', () => {
 
   it('sizes the window from the base id', () => {
     expect(agyChatUIConfig.getContextWindowSize('agy:gemini-3.7-flash', {})).toBe(1_000_000);
-    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {})).toBe(200_000);
+    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {})).toBe(250_000);
   });
 });
 

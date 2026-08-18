@@ -79,8 +79,9 @@ describe('agy model selection ids', () => {
 describe('agy context windows', () => {
   it('scales the meter per model family, not one flat number', () => {
     expect(resolveAgyContextWindow('gemini-3.1-pro-high')).toBe(1_000_000);
-    expect(resolveAgyContextWindow('claude-sonnet-4-6')).toBe(200_000);
-    expect(resolveAgyContextWindow('gpt-oss-120b-medium')).toBe(128_000);
+    expect(resolveAgyContextWindow('claude-sonnet-4-6')).toBe(250_000);
+    // 131.1k as agy displays it, which is 128Ki rather than a round 128,000.
+    expect(resolveAgyContextWindow('gpt-oss-120b-medium')).toBe(131_072);
     expect(resolveAgyContextWindow('some-future-model')).toBe(AGY_DEFAULT_CONTEXT_WINDOW);
   });
 
@@ -88,7 +89,7 @@ describe('agy context windows', () => {
     expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {
       'claude-sonnet-4-6': 1_000_000,
     })).toBe(1_000_000);
-    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {})).toBe(200_000);
+    expect(agyChatUIConfig.getContextWindowSize('agy:claude-sonnet-4-6', {})).toBe(250_000);
   });
 });
 
