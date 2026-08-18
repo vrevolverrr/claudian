@@ -6,11 +6,15 @@ import type {
 } from '../../../core/providers/types';
 import {
   AGY_DEFAULT_CONTEXT_WINDOW,
+  type AgyModelFamily,
+  buildAgyModelFamilies,
   decodeAgyModelId,
   encodeAgyModelId,
+  findAgyModelFamily,
   getEffectiveAgyModels,
   isAgyModelSelectionId,
   resolveAgyContextWindow,
+  resolveAgyDefaultEffort,
 } from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
 
@@ -28,6 +32,21 @@ const AGY_PERMISSION_MODE_TOGGLE: ProviderPermissionModeToggleConfig = {
   planValue: 'plan',
 };
 
+function getFamilies(settings: Record<string, unknown>): AgyModelFamily[] {
+  return buildAgyModelFamilies(
+    getEffectiveAgyModels(getAgyProviderSettings(settings).discoveredModels),
+  );
+}
+
+/** The family a selection names, or null when another provider owns it. */
+function getSelectedFamily(
+  model: string,
+  settings: Record<string, unknown>,
+): AgyModelFamily | null {
+  const baseId = decodeAgyModelId(model);
+  return baseId ? findAgyModelFamily(getFamilies(settings), baseId) : null;
+}
+
 export const agyChatUIConfig: ProviderChatUIConfig = {
   applyModelDefaults(model, settings): void {
     if (!isAgyModelSelectionId(model)) return;
@@ -38,11 +57,11 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   },
 
   getContextWindowSize(model, customLimits): number {
-    const rawId = decodeAgyModelId(model);
-    if (!rawId) return AGY_DEFAULT_CONTEXT_WINDOW;
+    const baseId = decodeAgyModelId(model);
+    if (!baseId) return AGY_DEFAULT_CONTEXT_WINDOW;
 
-    const configured = customLimits?.[rawId];
-    return configured && configured > 0 ? configured : resolveAgyContextWindow(rawId);
+    const configured = customLimits?.[baseId];
+    return configured && configured > 0 ? configured : resolveAgyContextWindow(baseId);
   },
 
   getCustomModelIds(): Set<string> {
@@ -51,38 +70,41 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   },
 
   getDefaultModel(settings): string | null {
-    const agySettings = getAgyProviderSettings(settings);
-    if (isAgyModelSelectionId(agySettings.selectedModel)) {
-      return agySettings.selectedModel;
-    }
+    const selected = getAgyProviderSettings(settings).selectedModel;
+    if (getSelectedFamily(selected, settings)) return selected;
 
-    const first = getEffectiveAgyModels(agySettings.discoveredModels)[0];
-    return first ? encodeAgyModelId(first.id) : null;
+    const first = getFamilies(settings)[0];
+    return first ? encodeAgyModelId(first.baseId) : null;
   },
 
-  getDefaultReasoningValue(): string {
-    return '';
+  getDefaultReasoningValue(model, settings): string {
+    return resolveAgyDefaultEffort(getSelectedFamily(model, settings)) ?? '';
   },
 
   getModelOptions(settings): ProviderUIOption[] {
-    return getEffectiveAgyModels(getAgyProviderSettings(settings).discoveredModels)
-      .map((model) => ({
-        label: model.label,
-        value: encodeAgyModelId(model.id),
-      }));
+    return getFamilies(settings).map((family) => ({
+      label: family.label,
+      value: encodeAgyModelId(family.baseId),
+    }));
   },
 
   getPermissionModeToggle(): ProviderPermissionModeToggleConfig {
     return AGY_PERMISSION_MODE_TOGGLE;
   },
 
-  getReasoningOptions(): ProviderReasoningOption[] {
-    // agy encodes reasoning effort in the model id, so there is nothing to pick.
-    return [];
+  getReasoningOptions(model, settings): ProviderReasoningOption[] {
+    const family = getSelectedFamily(model, settings);
+    if (!family || family.variants.length < 2) return [];
+
+    return family.variants.map((variant) => ({
+      label: variant.label,
+      value: variant.effort,
+    }));
   },
 
-  isAdaptiveReasoningModel(): boolean {
-    return false;
+  isAdaptiveReasoningModel(model, settings): boolean {
+    // A model agy offers at a single effort has nothing to choose between.
+    return (getSelectedFamily(model, settings)?.variants.length ?? 0) > 1;
   },
 
   isDefaultModel(model): boolean {
@@ -92,8 +114,7 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   normalizeModelVariant(model, settings): string {
     if (!isAgyModelSelectionId(model)) return model;
 
-    const options = agyChatUIConfig.getModelOptions(settings);
-    return options.some((option) => option.value === model)
+    return getSelectedFamily(model, settings)
       ? model
       : agyChatUIConfig.getDefaultModel?.(settings) ?? model;
   },

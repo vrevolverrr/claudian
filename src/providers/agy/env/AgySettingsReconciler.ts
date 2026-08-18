@@ -7,6 +7,13 @@ import { createRuntimeInputFingerprint } from '../../../core/providers/settings/
 import type { ProviderSettingsReconciler } from '../../../core/providers/types';
 import type { Conversation } from '../../../core/types';
 import { getHostnameKey, parseEnvironmentVariables } from '../../../utils/env';
+import {
+  composeAgyModelId,
+  decodeAgyModelId,
+  encodeAgyModelId,
+  isAgyModelSelectionId,
+  splitAgyModelId,
+} from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
 import { getAgyState } from '../types';
 
@@ -37,9 +44,61 @@ function invalidateAgyConversationSessions(conversations: Conversation[]): Conve
 export const agySettingsReconciler: ProviderSettingsReconciler = {
   invalidateConversationSessions: invalidateAgyConversationSessions,
 
-  normalizeModelVariantSettings(): boolean {
-    // agy has no model variants: reasoning effort is part of the model id.
-    return false;
+  /**
+   * Migrates selections stored before model and effort were separated.
+   *
+   * A stored `agy:gemini-3.7-flash-medium` names a model that the selector no
+   * longer lists; it becomes `agy:gemini-3.7-flash` with `medium` moved to the
+   * effort setting, so an existing conversation keeps the model it was using.
+   */
+  normalizeModelVariantSettings(settings: Record<string, unknown>): boolean {
+    let changed = false;
+
+    const migrate = (value: unknown): string | null => {
+      if (typeof value !== 'string' || !isAgyModelSelectionId(value)) return null;
+
+      const rawId = decodeAgyModelId(value);
+      if (!rawId) return null;
+
+      const { baseId, effort } = splitAgyModelId(rawId);
+      if (!effort) return null;
+
+      if (typeof settings.effortLevel !== 'string' || !settings.effortLevel.trim()) {
+        settings.effortLevel = effort;
+      }
+      return encodeAgyModelId(composeAgyModelId(baseId, null));
+    };
+
+    const model = migrate(settings.model);
+    if (model) {
+      settings.model = model;
+      changed = true;
+    }
+
+    const titleModel = migrate(settings.titleGenerationModel);
+    if (titleModel) {
+      settings.titleGenerationModel = titleModel;
+      changed = true;
+    }
+
+    const saved = settings.savedProviderModel;
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      const savedModels = saved as Record<string, unknown>;
+      const migrated = migrate(savedModels.agy);
+      if (migrated) {
+        savedModels.agy = migrated;
+        changed = true;
+      }
+    }
+
+    const providerSettings = getAgyProviderSettings(settings);
+    const selected = migrate(providerSettings.selectedModel);
+    if (selected) {
+      updateAgyProviderSettings(settings, { selectedModel: selected });
+      changed = true;
+    }
+
+    return changed;
   },
 
   reconcileModelWithEnvironment(

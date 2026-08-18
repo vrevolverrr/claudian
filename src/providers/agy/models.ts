@@ -111,3 +111,121 @@ export function normalizeAgyDiscoveredModels(value: unknown): AgyModel[] {
 export function getEffectiveAgyModels(discovered: readonly AgyModel[]): AgyModel[] {
   return discovered.length > 0 ? [...discovered] : [...AGY_FALLBACK_MODELS];
 }
+
+/**
+ * agy publishes one catalog entry per effort level rather than an effort
+ * control: `gemini-3.7-flash-high`, `-medium`, `-low` are three entries for one
+ * model. They are split back apart so the model selector lists models and the
+ * reasoning selector lists effort.
+ *
+ * Only these three suffixes count. `claude-opus-4-6-thinking` is its own model,
+ * not an effort variant of `claude-opus-4-6`.
+ */
+export const AGY_EFFORT_LEVELS = ['high', 'medium', 'low'] as const;
+
+export type AgyEffortLevel = typeof AGY_EFFORT_LEVELS[number];
+
+const EFFORT_LABELS: Readonly<Record<AgyEffortLevel, string>> = Object.freeze({
+  high: 'High',
+  low: 'Low',
+  medium: 'Medium',
+});
+
+/** Preference order when the stored effort is missing or no longer offered. */
+const EFFORT_FALLBACK_ORDER: readonly AgyEffortLevel[] = ['medium', 'high', 'low'];
+
+export interface AgyModelVariant {
+  readonly effort: AgyEffortLevel;
+  readonly label: string;
+  readonly rawId: string;
+}
+
+export interface AgyModelFamily {
+  readonly baseId: string;
+  readonly label: string;
+  readonly variants: readonly AgyModelVariant[];
+}
+
+export function splitAgyModelId(rawModelId: string): {
+  baseId: string;
+  effort: AgyEffortLevel | null;
+} {
+  for (const effort of AGY_EFFORT_LEVELS) {
+    const suffix = `-${effort}`;
+    if (rawModelId.endsWith(suffix) && rawModelId.length > suffix.length) {
+      return { baseId: rawModelId.slice(0, -suffix.length), effort };
+    }
+  }
+  return { baseId: rawModelId, effort: null };
+}
+
+export function composeAgyModelId(
+  baseId: string,
+  effort: string | null | undefined,
+): string {
+  return isAgyEffortLevel(effort) ? `${baseId}-${effort}` : baseId;
+}
+
+export function isAgyEffortLevel(value: unknown): value is AgyEffortLevel {
+  return typeof value === 'string'
+    && (AGY_EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
+/** Strips the effort out of a catalog label: "Gemini 3.7 Flash (High)". */
+function stripEffortLabel(label: string, effort: AgyEffortLevel): string {
+  const parenthetical = ` (${EFFORT_LABELS[effort]})`;
+  return label.endsWith(parenthetical)
+    ? label.slice(0, -parenthetical.length)
+    : label;
+}
+
+export function buildAgyModelFamilies(
+  models: readonly AgyModel[],
+): AgyModelFamily[] {
+  const families = new Map<string, { label: string; variants: AgyModelVariant[] }>();
+
+  for (const model of models) {
+    const { baseId, effort } = splitAgyModelId(model.id);
+    const family = families.get(baseId)
+      ?? { label: '', variants: [] };
+
+    if (effort === null) {
+      family.label = model.label;
+    } else {
+      family.label ||= stripEffortLabel(model.label, effort);
+      family.variants.push({
+        effort,
+        label: EFFORT_LABELS[effort],
+        rawId: model.id,
+      });
+    }
+
+    families.set(baseId, family);
+  }
+
+  return [...families].map(([baseId, family]) => ({
+    baseId,
+    label: family.label || baseId,
+    variants: family.variants.sort(
+      (left, right) => AGY_EFFORT_LEVELS.indexOf(left.effort)
+        - AGY_EFFORT_LEVELS.indexOf(right.effort),
+    ),
+  }));
+}
+
+export function findAgyModelFamily(
+  families: readonly AgyModelFamily[],
+  baseId: string,
+): AgyModelFamily | null {
+  return families.find((family) => family.baseId === baseId) ?? null;
+}
+
+export function resolveAgyDefaultEffort(
+  family: AgyModelFamily | null,
+): AgyEffortLevel | null {
+  if (!family || family.variants.length === 0) return null;
+
+  const offered = new Set(family.variants.map((variant) => variant.effort));
+  return EFFORT_FALLBACK_ORDER.find((effort) => offered.has(effort))
+    ?? family.variants[0].effort;
+}

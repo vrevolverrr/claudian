@@ -31,7 +31,17 @@ import {
   buildContextFromHistory,
   buildPromptWithHistoryContext,
 } from '../../../utils/session';
-import { decodeAgyModelId, resolveAgyContextWindow } from '../models';
+import {
+  type AgyModel,
+  buildAgyModelFamilies,
+  composeAgyModelId,
+  decodeAgyModelId,
+  findAgyModelFamily,
+  getEffectiveAgyModels,
+  resolveAgyContextWindow,
+  resolveAgyDefaultEffort,
+  splitAgyModelId,
+} from '../models';
 import { AgyEventNormalizer } from '../normalization/agyEventNormalization';
 import { AgyCliResolver } from '../runtime/AgyCliResolver';
 import {
@@ -285,12 +295,21 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       }
 
       const providerSettings = getAgyProviderSettings(settings);
-      // Claudian selections are prefixed (`agy:gemini-3.7-flash-medium`) so
-      // they cannot collide with other providers. agy knows only the raw id
-      // and rejects anything else, so a selection owned by another provider
-      // is dropped in favour of agy's own default.
-      const model = decodeAgyModelId(
+      // Claudian selections are prefixed (`agy:gemini-3.7-flash`) so they
+      // cannot collide with other providers. agy knows only the raw id and
+      // rejects anything else, so a selection owned by another provider is
+      // dropped in favour of agy's own default.
+      //
+      // The selection names a model and the effort is chosen separately, but
+      // agy wants them as one id. Splitting first also repairs a selection
+      // persisted before the split, which still carries its effort suffix.
+      const selected = decodeAgyModelId(
         request.configuration.model ?? providerSettings.selectedModel,
+      );
+      const model = resolveAgyLaunchModel(
+        selected,
+        request.configuration.reasoning,
+        getEffectiveAgyModels(providerSettings.discoveredModels),
       );
       const launchSpec = buildAgyLaunchSpec({
         cliPath,
@@ -307,7 +326,10 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       });
 
       const normalizer = new AgyEventNormalizer({
-        contextWindow: resolveContextWindow(settings, model),
+        contextWindow: resolveContextWindow(
+          settings,
+          selected ? splitAgyModelId(selected).baseId : null,
+        ),
         model,
       });
 
@@ -544,6 +566,37 @@ export function resolveAgyPermissionFlags(
     default:
       return { approvalsUnavailable: true, mode: null, skipPermissions: false };
   }
+}
+
+/**
+ * Builds the id agy expects from a Claudian selection and the chosen effort.
+ *
+ * The selection names a model and effort is chosen separately, but agy wants
+ * one id. Only an effort the catalog actually publishes for that model is
+ * appended: the shared effort setting outlives a switch to a model that has no
+ * variants, and agy rejects an id it does not serve. Splitting first also
+ * repairs a selection persisted before model and effort were separated.
+ */
+export function resolveAgyLaunchModel(
+  selectedRawId: string | null,
+  reasoning: string | undefined,
+  catalog: readonly AgyModel[],
+): string | null {
+  if (!selectedRawId) return null;
+
+  const { baseId, effort } = splitAgyModelId(selectedRawId);
+  const family = findAgyModelFamily(buildAgyModelFamilies(catalog), baseId);
+  if (!family || family.variants.length === 0) return baseId;
+
+  const offered = new Set<string>(family.variants.map((variant) => variant.effort));
+  const requested = [reasoning, effort].find(
+    (candidate) => candidate && offered.has(candidate),
+  );
+
+  return composeAgyModelId(
+    baseId,
+    requested ?? resolveAgyDefaultEffort(family),
+  );
 }
 
 export function getAgyInputText(request: ProviderExecutionRequest): string {

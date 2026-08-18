@@ -6,8 +6,9 @@ import type { ProviderCapabilities } from '../../core/providers/types';
  * History is Claudian's own: agy keeps its transcript in a private database
  * this provider does not read.
  *
- * Reasoning effort is part of the model id in agy's catalog
- * (`gemini-3.1-pro-high` vs `-low`), so there is no separate effort control.
+ * agy publishes one catalog entry per effort level rather than an effort
+ * control, so the variants are split apart and offered as reasoning effort;
+ * a model agy offers at a single effort shows no effort control at all.
  *
  * Images are supported indirectly: print mode has no image input, but agy's
  * file viewer returns image content to the model, so attachments are written
@@ -15,7 +16,7 @@ import type { ProviderCapabilities } from '../../core/providers/types';
  */
 export const AGY_PROVIDER_CAPABILITIES: Readonly<ProviderCapabilities> = Object.freeze({
   providerId: 'agy',
-  reasoningControl: 'none',
+  reasoningControl: 'effort',
   supportsFork: false,
   supportsImageAttachments: true,
   supportsInstructionMode: true,
