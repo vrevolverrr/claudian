@@ -17,6 +17,7 @@ import { ManagedStdioProcess } from '../../../core/process/ManagedStdioProcess';
 import { getRuntimeEnvironmentText } from '../../../core/providers/providerEnvironment';
 import type { ProviderHost } from '../../../core/providers/ProviderHost';
 import type { ChatMessage } from '../../../core/types';
+import type { ImageAttachment } from '../../../core/types';
 import {
   appendContextFiles,
   appendCurrentNote,
@@ -29,6 +30,10 @@ import {
 import { decodeAgyModelId } from '../models';
 import { AgyEventNormalizer } from '../normalization/agyEventNormalization';
 import { AgyCliResolver } from '../runtime/AgyCliResolver';
+import {
+  formatAgyImageReferences,
+  materializeAgyImages,
+} from '../runtime/AgyImageAttachments';
 import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
 import { buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
 import { parseAgyStreamLine } from '../runtime/agyStream';
@@ -212,6 +217,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     active: ActiveRun,
     request: ProviderExecutionRequest,
   ): Promise<void> {
+    let images: Awaited<ReturnType<typeof materializeAgyImages>> | null = null;
     try {
       const settings = this.host.settings as unknown as Record<string, unknown>;
       const cliPath = this.cliResolver.resolveFromSettings(settings);
@@ -225,9 +231,18 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         return;
       }
 
+      const attachments = request.input
+        .filter((block): block is { readonly type: 'image'; readonly image: ImageAttachment } =>
+          block.type === 'image')
+        .map((block) => block.image);
+      images = await materializeAgyImages(
+        attachments,
+        this.config.vaultWorkingDirectory,
+      );
+
       // agy replays its own conversation when --conversation is passed, so the
       // transcript is inlined only for a conversation agy has never seen.
-      const prompt = buildAgyPrompt(request, !this.providerSessionId);
+      const prompt = buildAgyPrompt(request, !this.providerSessionId, images.paths);
       if (!prompt) {
         this.finishRequested(active, {
           category: 'configuration',
@@ -243,14 +258,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         content: prompt,
         type: 'user_message_started',
       });
-
-      if (request.input.some((block) => block.type === 'image')) {
-        this.emitRequested(active, {
-          level: 'warning',
-          message: 'agy print mode accepts text only; attached images were not sent.',
-          type: 'notice',
-        });
-      }
 
       const permissionFlags = resolveAgyPermissionFlags(request);
       if (permissionFlags.approvalsUnavailable && !this.warnedAboutNonInteractivePermissions) {
@@ -297,6 +304,8 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         recoverable: true,
         type: 'execution_error',
       });
+    } finally {
+      await images?.cleanup();
     }
   }
 
@@ -525,6 +534,7 @@ export function resolveAgyPermissionFlags(
 export function buildAgyPrompt(
   request: ProviderExecutionRequest,
   replayHistory: boolean,
+  imagePaths: readonly string[] = [],
 ): string {
   const text = request.input
     .filter((block): block is { readonly type: 'text'; readonly text: string } =>
@@ -533,7 +543,7 @@ export function buildAgyPrompt(
     .join('\n\n')
     .trim();
 
-  if (!text) return '';
+  if (!text && imagePaths.length === 0) return '';
 
   // agy has no system-prompt flag, so explicit instructions — inline edit,
   // title generation, instruction refinement — are carried in the prompt.
@@ -547,6 +557,11 @@ export function buildAgyPrompt(
   const currentNotePath = request.context?.currentNote?.path;
   if (currentNotePath) {
     prompt = appendCurrentNote(prompt, currentNotePath);
+  }
+
+  const imageReferences = formatAgyImageReferences(imagePaths);
+  if (imageReferences) {
+    prompt = `${prompt}\n\n${imageReferences}`;
   }
 
   const externalPaths = request.context?.externalContextPaths;
