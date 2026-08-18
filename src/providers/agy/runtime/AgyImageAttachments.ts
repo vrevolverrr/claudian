@@ -68,10 +68,10 @@ let prunedThisProcess = false;
 /**
  * Ages out attachments once per process.
  *
- * ponytail: a time-based sweep, because the provider cannot know which
- * conversation an attachment belongs to. The window only has to outlast the
- * chance that agy re-reads the file; the image content itself already lives in
- * agy's conversation state. Tie this to conversation deletion instead if the
+ * The sweep is time-based because the provider cannot know which conversation
+ * an attachment belongs to. The window only has to outlast the chance that agy
+ * re-reads the file; the image content itself already lives in agy's own
+ * conversation state. Tie this to conversation deletion instead if the
  * execution contract ever carries a conversation identity.
  */
 export async function pruneAgyAttachmentsOnce(

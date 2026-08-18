@@ -41,8 +41,8 @@ const TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
 /**
  * Observed agy parameter keys, per tool, and their Claudian equivalents.
  *
- * ponytail: only keys seen on a real agy stream are listed. Add a row after
- * observing the tool run — never from guessing the schema.
+ * Only keys seen on a real agy stream are listed. Add a row after observing
+ * the tool run — never from guessing the schema.
  */
 const PARAMETER_KEY_MAP: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   list_dir: { DirectoryPath: 'path' },
