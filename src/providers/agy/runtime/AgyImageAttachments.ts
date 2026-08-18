@@ -2,6 +2,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 import type { ImageAttachment, ImageMediaType } from '../../../core/types';
+import { pruneAgyPrompts } from './AgyPromptSpill';
 
 const ATTACHMENT_DIRECTORY = path.join('.claudian', 'agy', 'attachments');
 
@@ -82,6 +83,7 @@ export async function pruneAgyAttachmentsOnce(
   if (prunedThisProcess) return;
   prunedThisProcess = true;
   await pruneAgyAttachments(vaultWorkingDirectory, now, maxAgeMs);
+  await pruneAgyPrompts(vaultWorkingDirectory, now, maxAgeMs);
 }
 
 export async function pruneAgyAttachments(

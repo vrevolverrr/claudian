@@ -45,6 +45,7 @@ const TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
  * the tool run — never from guessing the schema.
  */
 const PARAMETER_KEY_MAP: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  grep_search: { Query: 'pattern', SearchPath: 'path' },
   list_dir: { DirectoryPath: 'path' },
   replace_file_content: { TargetFile: 'file_path' },
   run_command: { CommandLine: 'command' },

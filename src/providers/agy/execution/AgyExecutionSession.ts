@@ -52,6 +52,7 @@ import {
 } from '../runtime/AgyImageAttachments';
 import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
 import { buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
+import { deliverAgyPrompt } from '../runtime/AgyPromptSpill';
 import { parseAgyStreamLine } from '../runtime/agyStream';
 import { getAgyProviderSettings } from '../settings';
 import { AGY_CONVERSATION_STATE_KEY, getAgyState } from '../types';
@@ -312,13 +313,29 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         request.configuration.reasoning,
         getEffectiveAgyModels(providerSettings.discoveredModels),
       );
+      // agy has no stdin path, so a prompt past the argument limit is spilled
+      // to a file it can read rather than failing the spawn.
+      const delivery = await deliverAgyPrompt(
+        prompt,
+        this.config.vaultWorkingDirectory,
+        active.turnId,
+      );
+      if (delivery.spilledTo) {
+        this.emitRequested(active, {
+          level: 'info',
+          message: 'This message was too large to pass to agy directly, so it '
+            + 'was written to a file for agy to read.',
+          type: 'notice',
+        });
+      }
+
       const launchSpec = buildAgyLaunchSpec({
         cliPath,
         ...(this.providerSessionId ? { conversationId: this.providerSessionId } : {}),
         env: buildAgyEnvironment(settings, cliPath),
         ...(permissionFlags.mode ? { mode: permissionFlags.mode } : {}),
         ...(model ? { model } : {}),
-        prompt,
+        prompt: delivery.prompt,
         skipPermissions: permissionFlags.skipPermissions,
         vaultWorkingDirectory: this.config.vaultWorkingDirectory,
         ...(request.configuration.externalWorkspaceRoots
