@@ -10,8 +10,6 @@ import { type AgyModel, normalizeAgyDiscoveredModels } from './models';
 
 export interface PersistedAgyProviderSettings {
   cliPath: string;
-  /** Version reported by the binary the last time the catalog was read. */
-  detectedCliVersion: string;
   cliPathsByHost: HostnameCliPaths;
   discoveredModels: AgyModel[];
   enabled: boolean;
@@ -26,7 +24,6 @@ export const DEFAULT_AGY_PROVIDER_SETTINGS: Readonly<PersistedAgyProviderSetting
   Object.freeze({
     cliPath: '',
     cliPathsByHost: {},
-    detectedCliVersion: '',
     discoveredModels: [],
     enabled: false,
     environmentHash: '',
@@ -42,10 +39,6 @@ export function getAgyProviderSettings(
   return {
     cliPath: readStoredString(config.cliPath, DEFAULT_AGY_PROVIDER_SETTINGS.cliPath),
     cliPathsByHost: normalizeHostnameStringMap(config.cliPathsByHost),
-    detectedCliVersion: readStoredString(
-      config.detectedCliVersion,
-      DEFAULT_AGY_PROVIDER_SETTINGS.detectedCliVersion,
-    ),
     discoveredModels: normalizeAgyDiscoveredModels(config.discoveredModels),
     enabled: readStoredBoolean(config.enabled, DEFAULT_AGY_PROVIDER_SETTINGS.enabled),
     environmentHash: readStoredString(

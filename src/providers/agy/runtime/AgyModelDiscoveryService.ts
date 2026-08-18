@@ -15,8 +15,6 @@ const OUTPUT_LIMIT_BYTES = 256 * 1024;
 
 export interface AgyModelDiscoveryResult extends ProviderModelCatalogRefreshResult {
   readonly models: AgyModel[];
-  /** Empty when the binary could not be reached or did not report one. */
-  readonly cliVersion?: string;
 }
 
 /**
@@ -46,23 +44,6 @@ export class AgyModelDiscoveryService {
     return this.refresh();
   }
 
-  private async readCliVersion(
-    cliPath: string,
-    environment: NodeJS.ProcessEnv,
-  ): Promise<string> {
-    try {
-      const { stdout } = await execFileAsync(cliPath, ['--version'], {
-        env: environment,
-        maxBuffer: OUTPUT_LIMIT_BYTES,
-        timeout: DISCOVERY_TIMEOUT_MS,
-      });
-      return stdout.trim().split('\n')[0]?.trim() ?? '';
-    } catch {
-      // A version this build cannot read is reported as unknown, never fatal.
-      return '';
-    }
-  }
-
   async refresh(): Promise<AgyModelDiscoveryResult> {
     const settings = this.host.settings as unknown as Record<string, unknown>;
     const cliPath = this.cliResolver.resolveFromSettings(settings);
@@ -70,21 +51,17 @@ export class AgyModelDiscoveryService {
       return { changed: false, diagnostics: 'the agy CLI was not found', models: [] };
     }
 
-    const environment: NodeJS.ProcessEnv = (() => {
+    let stdout: string;
+    try {
       const configured = parseEnvironmentVariables(
         getRuntimeEnvironmentText(settings, 'agy'),
       );
-      return {
-        ...process.env,
-        ...configured,
-        PATH: getEnhancedPath(configured.PATH, cliPath),
-      };
-    })();
-
-    let stdout: string;
-    try {
       ({ stdout } = await execFileAsync(cliPath, ['models'], {
-        env: environment,
+        env: {
+          ...process.env,
+          ...configured,
+          PATH: getEnhancedPath(configured.PATH, cliPath),
+        },
         maxBuffer: OUTPUT_LIMIT_BYTES,
         timeout: DISCOVERY_TIMEOUT_MS,
       }));
