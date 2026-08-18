@@ -6,11 +6,14 @@ import {
   readStoredString,
 } from '../../core/providers/settings/storedSettings';
 import type { HostnameCliPaths } from '../../core/types/settings';
+import { type AgyModel, normalizeAgyDiscoveredModels } from './models';
 
 export interface PersistedAgyProviderSettings {
   cliPath: string;
   cliPathsByHost: HostnameCliPaths;
+  discoveredModels: AgyModel[];
   enabled: boolean;
+  environmentHash: string;
   environmentVariables: string;
   selectedModel: string;
 }
@@ -21,7 +24,9 @@ export const DEFAULT_AGY_PROVIDER_SETTINGS: Readonly<PersistedAgyProviderSetting
   Object.freeze({
     cliPath: '',
     cliPathsByHost: {},
+    discoveredModels: [],
     enabled: false,
+    environmentHash: '',
     environmentVariables: '',
     selectedModel: '',
   });
@@ -34,7 +39,12 @@ export function getAgyProviderSettings(
   return {
     cliPath: readStoredString(config.cliPath, DEFAULT_AGY_PROVIDER_SETTINGS.cliPath),
     cliPathsByHost: normalizeHostnameStringMap(config.cliPathsByHost),
+    discoveredModels: normalizeAgyDiscoveredModels(config.discoveredModels),
     enabled: readStoredBoolean(config.enabled, DEFAULT_AGY_PROVIDER_SETTINGS.enabled),
+    environmentHash: readStoredString(
+      config.environmentHash,
+      DEFAULT_AGY_PROVIDER_SETTINGS.environmentHash,
+    ),
     environmentVariables: readStoredString(
       config.environmentVariables,
       getProviderEnvironmentVariables(settings, 'agy')
