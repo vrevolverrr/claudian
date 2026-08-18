@@ -535,7 +535,15 @@ export function buildAgyPrompt(
 
   if (!text) return '';
 
-  let prompt = text;
+  // agy has no system-prompt flag, so explicit instructions — inline edit,
+  // title generation, instruction refinement — are carried in the prompt.
+  // Without this they are dropped and those features answer conversationally
+  // instead of returning the replacement text they were asked for.
+  const { systemInstructions } = request.configuration;
+  let prompt = systemInstructions.kind === 'explicit'
+    && systemInstructions.instructions.trim()
+    ? `${systemInstructions.instructions.trim()}\n\n${text}`
+    : text;
   const currentNotePath = request.context?.currentNote?.path;
   if (currentNotePath) {
     prompt = appendCurrentNote(prompt, currentNotePath);

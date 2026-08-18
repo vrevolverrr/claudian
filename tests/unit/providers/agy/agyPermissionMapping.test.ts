@@ -134,6 +134,21 @@ describe('buildAgyPrompt', () => {
     expect(buildAgyPrompt(withHistory, false)).not.toContain('otters');
   });
 
+  it('carries explicit system instructions, which agy has no flag for', () => {
+    const request = makeRequest('yolo', { kind: 'provider-default' }, {
+      configuration: {
+        permissionMode: 'yolo',
+        systemInstructions: {
+          instructions: 'Reply with the replacement text only.',
+          kind: 'explicit',
+        },
+      },
+    });
+
+    expect(buildAgyPrompt(request, false))
+      .toBe('Reply with the replacement text only.\n\nsummarize my notes');
+  });
+
   it('appends the current note path', () => {
     const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
       context: { currentNote: { path: 'Daily/2026-08-18.md' } },
