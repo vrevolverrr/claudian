@@ -1,5 +1,4 @@
 import {
-  TOOL_ASK_USER_QUESTION,
   TOOL_BASH,
   TOOL_EDIT,
   TOOL_GLOB,
@@ -16,13 +15,14 @@ import {
 /**
  * agy tool identity -> Claudian tool identity.
  *
- * Names are mapped so the existing renderers and icons apply. Parameter keys
+ * Names are mapped so the existing renderers and icons apply. agy's
+ * `ask_question` is absent on purpose: print mode discards it before it reaches
+ * the stream, so nothing would ever carry that name. Parameter keys
  * are only rewritten where the agy key has been observed on the wire; every
  * other key is passed through untouched, so an unmapped parameter degrades to
  * a generic tool-call render instead of a wrong one.
  */
 const TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  ask_question: TOOL_ASK_USER_QUESTION,
   find_by_name: TOOL_GLOB,
   grep_search: TOOL_GREP,
   invoke_subagent: TOOL_SUBAGENT,
