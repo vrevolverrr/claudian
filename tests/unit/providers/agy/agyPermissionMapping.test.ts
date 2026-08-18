@@ -92,6 +92,17 @@ describe('buildAgyLaunchSpec', () => {
     expect(spec.args[spec.args.indexOf('--conversation') + 1]).toBe('abc-123');
   });
 
+  it('passes the raw agy model id and never an effort flag', () => {
+    const spec = buildAgyLaunchSpec({
+      ...base,
+      model: 'gemini-3.7-flash-medium',
+      skipPermissions: false,
+    });
+
+    expect(spec.args[spec.args.indexOf('--model') + 1]).toBe('gemini-3.7-flash-medium');
+    expect(spec.args).not.toContain('--effort');
+  });
+
   it('deduplicates workspace roots against the vault directory', () => {
     const spec = buildAgyLaunchSpec({
       ...base,

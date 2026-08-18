@@ -26,6 +26,7 @@ import {
   buildContextFromHistory,
   buildPromptWithHistoryContext,
 } from '../../../utils/session';
+import { decodeAgyModelId } from '../models';
 import { AgyEventNormalizer } from '../normalization/agyEventNormalization';
 import { AgyCliResolver } from '../runtime/AgyCliResolver';
 import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
@@ -263,16 +264,20 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       }
 
       const providerSettings = getAgyProviderSettings(settings);
+      // Claudian selections are prefixed (`agy:gemini-3.7-flash-medium`) so
+      // they cannot collide with other providers. agy knows only the raw id
+      // and rejects anything else, so a selection owned by another provider
+      // is dropped in favour of agy's own default.
+      const model = decodeAgyModelId(
+        request.configuration.model ?? providerSettings.selectedModel,
+      );
       const launchSpec = buildAgyLaunchSpec({
         cliPath,
         ...(this.providerSessionId ? { conversationId: this.providerSessionId } : {}),
         env: buildAgyEnvironment(settings, cliPath),
         ...(permissionFlags.mode ? { mode: permissionFlags.mode } : {}),
-        ...(request.configuration.model ? { model: request.configuration.model } : {}),
+        ...(model ? { model } : {}),
         prompt,
-        ...(request.configuration.reasoning
-          ? { reasoning: request.configuration.reasoning }
-          : {}),
         skipPermissions: permissionFlags.skipPermissions,
         vaultWorkingDirectory: this.config.vaultWorkingDirectory,
         ...(request.configuration.externalWorkspaceRoots
@@ -280,9 +285,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
           : {}),
       });
 
-      const normalizer = new AgyEventNormalizer({
-        model: request.configuration.model ?? providerSettings.selectedModel ?? null,
-      });
+      const normalizer = new AgyEventNormalizer({ model });
 
       await this.streamTurn(active, launchSpec, normalizer);
     } catch (error) {

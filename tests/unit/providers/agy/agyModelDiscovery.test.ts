@@ -1,5 +1,5 @@
 import type { ProviderHost } from '@/core/providers/ProviderHost';
-import { parseAgyModelCatalog } from '@/providers/agy/models';
+import { decodeAgyModelId, encodeAgyModelId, parseAgyModelCatalog } from '@/providers/agy/models';
 import { AgyModelDiscoveryService } from '@/providers/agy/runtime/AgyModelDiscoveryService';
 
 function makeHost(agyConfig: Record<string, unknown>): ProviderHost {
@@ -51,5 +51,20 @@ describe('parseAgyModelCatalog', () => {
       { id: 'gemini-3.1-pro-high', label: 'Gemini 3.1 Pro (High)' },
       { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Thinking)' },
     ]);
+  });
+});
+
+describe('agy model selection ids', () => {
+  it('round-trips through the prefix agy itself never sees', () => {
+    const encoded = encodeAgyModelId('gemini-3.7-flash-medium');
+
+    expect(encoded).toBe('agy:gemini-3.7-flash-medium');
+    expect(decodeAgyModelId(encoded)).toBe('gemini-3.7-flash-medium');
+  });
+
+  it('disowns a selection belonging to another provider', () => {
+    // agy's own catalog contains claude-sonnet-4-6, so a bare id is ambiguous.
+    expect(decodeAgyModelId('claude-sonnet-4-6')).toBeNull();
+    expect(decodeAgyModelId('pi:anthropic/claude-sonnet-4-6')).toBeNull();
   });
 });

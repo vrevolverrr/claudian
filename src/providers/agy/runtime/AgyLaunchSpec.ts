@@ -12,9 +12,8 @@ export interface AgyLaunchInputs {
   readonly prompt: string;
   readonly vaultWorkingDirectory: string;
   readonly externalWorkspaceRoots?: readonly string[];
+  /** Raw agy model id, already decoded from the Claudian selection id. */
   readonly model?: string;
-  /** agy --effort: low | medium | high. */
-  readonly reasoning?: string;
   /** agy --mode: accept-edits | plan. Omitted for agy's default. */
   readonly mode?: string;
   readonly skipPermissions: boolean;
@@ -32,6 +31,9 @@ const DEFAULT_PRINT_TIMEOUT = '10m';
  * by agy and surfaces as a failed tool step. Every mode that writes therefore
  * requires `skipPermissions` or an `accept-edits` mode; the caller owns that
  * policy decision and this builder only records it.
+ *
+ * No `--effort` is ever passed: agy encodes reasoning effort in the model id
+ * and rejects the flag outright for a model that already names its effort.
  */
 export function buildAgyLaunchSpec(inputs: AgyLaunchInputs): AgyLaunchSpec {
   const args = [
@@ -51,9 +53,6 @@ export function buildAgyLaunchSpec(inputs: AgyLaunchInputs): AgyLaunchSpec {
   }
   if (inputs.model) {
     args.push('--model', inputs.model);
-  }
-  if (inputs.reasoning) {
-    args.push('--effort', inputs.reasoning);
   }
   if (inputs.conversationId) {
     args.push('--conversation', inputs.conversationId);
