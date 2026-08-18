@@ -150,6 +150,35 @@ describe('buildAgyPrompt', () => {
     expect(buildAgyPrompt(withHistory, false)).not.toContain('otters');
   });
 
+  it('sends the vault system prompt once, on the turn that creates the conversation', () => {
+    const request = makeRequest('yolo');
+    const environment = { settings: { userName: 'Bryan' }, vaultPath: '/vault' };
+
+    const first = buildAgyPrompt(request, true, [], environment);
+    expect(first).toContain('You are **Claudian**');
+    expect(first).toContain('Bryan');
+    expect(first).toContain('/vault');
+
+    // --conversation replays it; repeating it every turn would only grow.
+    expect(buildAgyPrompt(request, false, [], environment)).toBe('summarize my notes');
+  });
+
+  it('lets an explicit prompt replace the vault prompt entirely', () => {
+    const request = makeRequest('yolo', { kind: 'provider-default' }, {
+      configuration: {
+        permissionMode: 'yolo',
+        systemInstructions: { instructions: 'Return only the rewritten text.', kind: 'explicit' },
+      },
+    });
+    const prompt = buildAgyPrompt(request, true, [], {
+      settings: {},
+      vaultPath: '/vault',
+    });
+
+    expect(prompt).toBe('Return only the rewritten text.\n\nsummarize my notes');
+    expect(prompt).not.toContain('You are **Claudian**');
+  });
+
   it('carries explicit system instructions, which agy has no flag for', () => {
     const request = makeRequest('yolo', { kind: 'provider-default' }, {
       configuration: {

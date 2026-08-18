@@ -14,6 +14,10 @@ import {
   type ProviderSessionStatus,
 } from '../../../core/execution';
 import { ManagedStdioProcess } from '../../../core/process/ManagedStdioProcess';
+import {
+  buildSystemPrompt,
+  type SystemPromptSettings,
+} from '../../../core/prompt/mainAgent';
 import { getRuntimeEnvironmentText } from '../../../core/providers/providerEnvironment';
 import type { ProviderHost } from '../../../core/providers/ProviderHost';
 import type { ChatMessage } from '../../../core/types';
@@ -241,7 +245,12 @@ export class AgyExecutionSession implements ProviderExecutionSession {
 
       // agy replays its own conversation when --conversation is passed, so the
       // transcript is inlined only for a conversation agy has never seen.
-      const prompt = buildAgyPrompt(request, !this.providerSessionId, images.paths);
+      const prompt = buildAgyPrompt(
+        request,
+        !this.providerSessionId,
+        images.paths,
+        { settings, vaultPath: this.config.vaultWorkingDirectory },
+      );
       if (!prompt) {
         this.finishRequested(active, {
           category: 'configuration',
@@ -540,24 +549,57 @@ export function getAgyInputText(request: ProviderExecutionRequest): string {
     .trim();
 }
 
+export interface AgyPromptEnvironment {
+  readonly settings: Record<string, unknown>;
+  readonly vaultPath: string;
+}
+
+/**
+ * agy has no system-prompt flag, so instructions ride in the prompt.
+ *
+ * `--conversation` replays everything agy was already told, so the vault
+ * system prompt is sent once, on the turn that creates the conversation. An
+ * explicit prompt — inline edit, title generation — replaces it outright and
+ * is sent every time, because those run as their own one-shot conversations.
+ */
+function resolveAgySystemPrompt(
+  request: ProviderExecutionRequest,
+  isFirstTurn: boolean,
+  environment?: AgyPromptEnvironment,
+): string {
+  const { systemInstructions } = request.configuration;
+  if (systemInstructions.kind === 'explicit') {
+    return systemInstructions.instructions.trim();
+  }
+  if (!isFirstTurn || !environment) return '';
+
+  return buildSystemPrompt({
+    customPrompt: readSetting(environment.settings.systemPrompt),
+    mediaFolder: readSetting(environment.settings.mediaFolder),
+    userName: readSetting(environment.settings.userName),
+    vaultPath: environment.vaultPath,
+  } satisfies SystemPromptSettings, {
+    // agy brings its own tools and its own names for them.
+    toolGuidanceProfile: 'provider-native',
+  });
+}
+
+function readSetting(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 export function buildAgyPrompt(
   request: ProviderExecutionRequest,
   replayHistory: boolean,
   imagePaths: readonly string[] = [],
+  environment?: AgyPromptEnvironment,
 ): string {
   const text = getAgyInputText(request);
 
   if (!text && imagePaths.length === 0) return '';
 
-  // agy has no system-prompt flag, so explicit instructions — inline edit,
-  // title generation, instruction refinement — are carried in the prompt.
-  // Without this they are dropped and those features answer conversationally
-  // instead of returning the replacement text they were asked for.
-  const { systemInstructions } = request.configuration;
-  let prompt = systemInstructions.kind === 'explicit'
-    && systemInstructions.instructions.trim()
-    ? `${systemInstructions.instructions.trim()}\n\n${text}`
-    : text;
+  const systemPrompt = resolveAgySystemPrompt(request, replayHistory, environment);
+  let prompt = systemPrompt ? `${systemPrompt}\n\n${text}` : text;
   const currentNotePath = request.context?.currentNote?.path;
   if (currentNotePath) {
     prompt = appendCurrentNote(prompt, currentNotePath);
