@@ -389,7 +389,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         if (this.isActive(active)) {
           this.finishRequested(active, {
             category: 'transport',
-            message: `agy could not be started: ${error.message}`,
+            message: describeLaunchFailure(error),
             recoverable: true,
             type: 'execution_error',
           });
@@ -418,7 +418,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         if (this.isActive(active)) {
           this.finishRequested(active, {
             category: 'transport',
-            message: `agy could not be started: ${toMessage(error)}`,
+            message: describeLaunchFailure(error),
             recoverable: true,
             type: 'execution_error',
           });
