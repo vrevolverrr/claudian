@@ -5,8 +5,10 @@ import {
   encodeAgyModelId,
   parseAgyModelCatalog,
   resolveAgyContextWindow,
+  VERIFIED_AGY_CLI_VERSION,
 } from '@/providers/agy/models';
 import { AgyModelDiscoveryService } from '@/providers/agy/runtime/AgyModelDiscoveryService';
+import { getAgyProviderSettings } from '@/providers/agy/settings';
 import { agyChatUIConfig } from '@/providers/agy/ui/AgyChatUIConfig';
 
 function makeHost(agyConfig: Record<string, unknown>): ProviderHost {
@@ -103,5 +105,16 @@ describe('agy permission mode', () => {
     expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'yolo' })).toBe('yolo');
     expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'plan' })).toBe('plan');
     expect(agyChatUIConfig.resolvePermissionMode?.({ permissionMode: 'anything' })).toBe('normal');
+  });
+});
+
+describe('agy CLI version drift', () => {
+  it('records the version this provider was verified against', () => {
+    // Bump this together with a re-check of the stream shape, never alone.
+    expect(VERIFIED_AGY_CLI_VERSION).toBe('1.1.14');
+  });
+
+  it('reports no detected version until a catalog has been read', () => {
+    expect(getAgyProviderSettings({}).detectedCliVersion).toBe('');
   });
 });

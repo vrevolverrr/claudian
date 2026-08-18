@@ -10,7 +10,7 @@ import { renderHostnameCliPathSetting } from '../../../shared/settings/HostnameC
 import { renderProviderEnablementSetting } from '../../../shared/settings/ProviderEnablementSetting';
 import { getHostnameKey } from '../../../utils/env';
 import { getAgyWorkspaceServices } from '../app/AgyWorkspaceServices';
-import { getEffectiveAgyModels } from '../models';
+import { getEffectiveAgyModels, VERIFIED_AGY_CLI_VERSION } from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
 
 const AGY_PROVIDER_ID = 'agy' as const;
@@ -85,6 +85,24 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
 
     new Setting(container).setName('Models').setHeading();
 
+    const versionNotice = container.createDiv({
+      cls: 'claudian-setting-validation claudian-setting-validation-warning claudian-hidden',
+    });
+    const renderVersionNotice = (): void => {
+      const detected = getAgyProviderSettings(settingsBag).detectedCliVersion;
+      const drifted = Boolean(detected) && detected !== VERIFIED_AGY_CLI_VERSION;
+      versionNotice.toggleClass('claudian-hidden', !drifted);
+      if (!drifted) return;
+
+      versionNotice.setText(
+        `agy ${detected} is installed; this provider was verified against `
+        + `${VERIFIED_AGY_CLI_VERSION}. agy's stream format carries no version, `
+        + 'so check that tool calls, streamed text and token counts still render '
+        + 'before trusting a long session.',
+      );
+    };
+    renderVersionNotice();
+
     const modelList = container.createDiv({ cls: 'claudian-agy-model-list' });
     const renderModelList = (): void => {
       const models = getEffectiveAgyModels(
@@ -110,6 +128,7 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
               return;
             }
             renderModelList();
+            renderVersionNotice();
             context.notifyProviderModelOptionsChanged(AGY_PROVIDER_ID);
           } finally {
             button.setDisabled(false);

@@ -1,5 +1,14 @@
 export const AGY_MODEL_PREFIX = 'agy:';
 
+/**
+ * The agy release this provider was built and verified against.
+ *
+ * agy's `stream-json` output carries no version or compatibility promise, so a
+ * different release is the only warning available that the event shape, tool
+ * names or parameter keys may have moved underneath the parser.
+ */
+export const VERIFIED_AGY_CLI_VERSION = '1.1.14';
+
 /** Fallback for a model whose family is not recognised. */
 export const AGY_DEFAULT_CONTEXT_WINDOW = 200_000;
 
