@@ -37,6 +37,7 @@ import { AgyCliResolver } from '../runtime/AgyCliResolver';
 import {
   formatAgyImageReferences,
   materializeAgyImages,
+  pruneAgyAttachmentsOnce,
 } from '../runtime/AgyImageAttachments';
 import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
 import { buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
@@ -99,6 +100,8 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     const seed = config.resumeSeed;
     this.providerSessionId = seed?.providerSessionId
       ?? getAgyState(seed?.providerState).conversationId;
+    void pruneAgyAttachmentsOnce(config.vaultWorkingDirectory, Date.now())
+      .catch(() => undefined);
   }
 
   execute(request: ProviderExecutionRequest): ProviderExecutionRun {

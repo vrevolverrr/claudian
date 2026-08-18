@@ -27,8 +27,9 @@ export interface MaterializedAgyImages {
  * deleting them breaks follow-ups; the name is the attachment id, so
  * re-sending the same image rewrites one file rather than adding another.
  *
- * ponytail: nothing prunes the directory. Deleting a conversation should take
- * its attachments with it once conversation deletion has a provider hook.
+ * Attachments cannot be tied to the conversation that owns them: a provider
+ * session is deliberately never told its Claudian conversation identity, so
+ * deletion of a conversation cannot find its files. They are aged out instead.
  */
 export async function materializeAgyImages(
   attachments: readonly ImageAttachment[],
@@ -58,4 +59,63 @@ export function formatAgyImageReferences(paths: readonly string[]): string {
   const list = paths.map((file) => `- ${file}`).join('\n');
   return `The user attached ${paths.length === 1 ? 'this image' : 'these images'}. `
     + `Read ${paths.length === 1 ? 'it' : 'them'} from disk before answering:\n${list}`;
+}
+
+const ATTACHMENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+let prunedThisProcess = false;
+
+/**
+ * Ages out attachments once per process.
+ *
+ * ponytail: a time-based sweep, because the provider cannot know which
+ * conversation an attachment belongs to. The window only has to outlast the
+ * chance that agy re-reads the file; the image content itself already lives in
+ * agy's conversation state. Tie this to conversation deletion instead if the
+ * execution contract ever carries a conversation identity.
+ */
+export async function pruneAgyAttachmentsOnce(
+  vaultWorkingDirectory: string,
+  now: number,
+  maxAgeMs: number = ATTACHMENT_MAX_AGE_MS,
+): Promise<void> {
+  if (prunedThisProcess) return;
+  prunedThisProcess = true;
+  await pruneAgyAttachments(vaultWorkingDirectory, now, maxAgeMs);
+}
+
+export async function pruneAgyAttachments(
+  vaultWorkingDirectory: string,
+  now: number,
+  maxAgeMs: number = ATTACHMENT_MAX_AGE_MS,
+): Promise<string[]> {
+  const directory = path.join(vaultWorkingDirectory, ATTACHMENT_DIRECTORY);
+
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(directory);
+  } catch {
+    // No attachments have ever been written.
+    return [];
+  }
+
+  const removed: string[] = [];
+  for (const entry of entries) {
+    const file = path.join(directory, entry);
+    try {
+      const stats = await fsp.stat(file);
+      if (!stats.isFile() || now - stats.mtimeMs <= maxAgeMs) continue;
+      await fsp.rm(file, { force: true });
+      removed.push(file);
+    } catch {
+      // A file that cannot be read or removed is left for the next sweep.
+    }
+  }
+
+  return removed;
+}
+
+/** Test seam: the once-per-process guard is module state. */
+export function resetAgyAttachmentPruneGuard(): void {
+  prunedThisProcess = false;
 }

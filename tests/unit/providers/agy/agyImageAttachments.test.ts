@@ -6,6 +6,9 @@ import type { ImageAttachment } from '@/core/types';
 import {
   formatAgyImageReferences,
   materializeAgyImages,
+  pruneAgyAttachments,
+  pruneAgyAttachmentsOnce,
+  resetAgyAttachmentPruneGuard,
 } from '@/providers/agy/runtime/AgyImageAttachments';
 
 function makeAttachment(overrides: Partial<ImageAttachment> = {}): ImageAttachment {
@@ -88,5 +91,61 @@ describe('formatAgyImageReferences', () => {
     const many = formatAgyImageReferences(['/vault/a.png', '/vault/b.png']);
     expect(many).toContain('these images');
     expect(many).toContain('- /vault/b.png');
+  });
+});
+
+describe('pruneAgyAttachments', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  let vault: string;
+
+  beforeEach(async () => {
+    vault = await fsp.mkdtemp(path.join(os.tmpdir(), 'agy-prune-'));
+    resetAgyAttachmentPruneGuard();
+  });
+
+  afterEach(async () => {
+    await fsp.rm(vault, { force: true, recursive: true });
+  });
+
+  async function writeAttachment(id: string, ageMs: number, now: number): Promise<string> {
+    const { paths } = await materializeAgyImages(
+      [{
+        data: Buffer.from('x').toString('base64'),
+        id,
+        mediaType: 'image/png',
+        name: `${id}.png`,
+        size: 1,
+        source: 'paste',
+      }],
+      vault,
+    );
+    const stamp = new Date(now - ageMs);
+    await fsp.utimes(paths[0], stamp, stamp);
+    return paths[0];
+  }
+
+  it('removes attachments past the window and keeps the rest', async () => {
+    const now = Date.UTC(2026, 7, 18);
+    const stale = await writeAttachment('stale', 40 * DAY, now);
+    const recent = await writeAttachment('recent', 2 * DAY, now);
+
+    await expect(pruneAgyAttachments(vault, now)).resolves.toEqual([stale]);
+    await expect(fsp.access(stale)).rejects.toThrow();
+    await expect(fsp.access(recent)).resolves.toBeUndefined();
+  });
+
+  it('does nothing when no attachment has ever been written', async () => {
+    await expect(pruneAgyAttachments(vault, Date.now())).resolves.toEqual([]);
+  });
+
+  it('sweeps once per process, so every new session does not re-scan', async () => {
+    const now = Date.UTC(2026, 7, 18);
+    await writeAttachment('stale', 40 * DAY, now);
+
+    await pruneAgyAttachmentsOnce(vault, now);
+    const second = await writeAttachment('stale-two', 40 * DAY, now);
+    await pruneAgyAttachmentsOnce(vault, now);
+
+    await expect(fsp.access(second)).resolves.toBeUndefined();
   });
 });
