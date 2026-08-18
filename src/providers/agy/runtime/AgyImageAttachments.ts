@@ -14,8 +14,6 @@ const EXTENSIONS: Readonly<Record<ImageMediaType, string>> = Object.freeze({
 
 export interface MaterializedAgyImages {
   readonly paths: string[];
-  /** Removes the files written for one turn. Safe to call more than once. */
-  cleanup(): Promise<void>;
 }
 
 /**
@@ -24,16 +22,20 @@ export interface MaterializedAgyImages {
  * therefore written inside the vault, where `--add-dir` already grants access,
  * and referenced by path.
  *
- * ponytail: files live for one turn and are deleted when it ends. An image the
- * model may want again in a later turn would need a per-conversation store
- * with its own lifetime.
+ * The files outlive the turn on purpose. agy keeps the conversation in its own
+ * state and re-reads the path when a later question needs a fresh look, so
+ * deleting them breaks follow-ups; the name is the attachment id, so
+ * re-sending the same image rewrites one file rather than adding another.
+ *
+ * ponytail: nothing prunes the directory. Deleting a conversation should take
+ * its attachments with it once conversation deletion has a provider hook.
  */
 export async function materializeAgyImages(
   attachments: readonly ImageAttachment[],
   vaultWorkingDirectory: string,
 ): Promise<MaterializedAgyImages> {
   if (attachments.length === 0) {
-    return { cleanup: async () => undefined, paths: [] };
+    return { paths: [] };
   }
 
   const directory = path.join(vaultWorkingDirectory, ATTACHMENT_DIRECTORY);
@@ -47,21 +49,7 @@ export async function materializeAgyImages(
     paths.push(file);
   }
 
-  let cleaned = false;
-  return {
-    async cleanup(): Promise<void> {
-      if (cleaned) return;
-      cleaned = true;
-      await Promise.all(paths.map(async (file) => {
-        try {
-          await fsp.rm(file, { force: true });
-        } catch {
-          // A leftover attachment is harmless; it must not fail the turn.
-        }
-      }));
-    },
-    paths,
-  };
+  return { paths };
 }
 
 export function formatAgyImageReferences(paths: readonly string[]): string {

@@ -5,6 +5,7 @@ import type {
 import type { PermissionMode } from '@/core/types/settings';
 import {
   buildAgyPrompt,
+  getAgyInputText,
   resolveAgyPermissionFlags,
 } from '@/providers/agy/execution/AgyExecutionSession';
 import { buildAgyLaunchSpec } from '@/providers/agy/runtime/AgyLaunchSpec';
@@ -112,6 +113,21 @@ describe('buildAgyLaunchSpec', () => {
 
     expect(spec.args.filter((arg) => arg === '--add-dir')).toHaveLength(2);
     expect(spec.args).toContain('/other');
+  });
+});
+
+describe('getAgyInputText', () => {
+  it('is what the user wrote, without the transport scaffolding', () => {
+    const request = makeRequest('yolo', { kind: 'provider-default' }, {
+      configuration: {
+        permissionMode: 'yolo',
+        systemInstructions: { instructions: 'Answer tersely.', kind: 'explicit' },
+      },
+      context: { currentNote: { path: 'Daily/2026-08-18.md' } },
+    });
+
+    expect(getAgyInputText(request)).toBe('summarize my notes');
+    expect(buildAgyPrompt(request, false)).not.toBe(getAgyInputText(request));
   });
 });
 

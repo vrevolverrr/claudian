@@ -50,12 +50,22 @@ describe('materializeAgyImages', () => {
     expect(images.paths[0].endsWith('a.jpg')).toBe(true);
   });
 
-  it('removes the files when the turn ends, idempotently', async () => {
+  it('leaves the file in place, because agy re-reads it on a later turn', async () => {
     const images = await materializeAgyImages([makeAttachment()], vault);
 
-    await images.cleanup();
-    await expect(fsp.access(images.paths[0])).rejects.toThrow();
-    await expect(images.cleanup()).resolves.toBeUndefined();
+    await expect(fsp.access(images.paths[0])).resolves.toBeUndefined();
+  });
+
+  it('rewrites one file when the same attachment is sent again', async () => {
+    const first = await materializeAgyImages([makeAttachment()], vault);
+    const second = await materializeAgyImages(
+      [makeAttachment({ data: Buffer.from('second').toString('base64') })],
+      vault,
+    );
+
+    expect(second.paths).toEqual(first.paths);
+    await expect(fsp.readdir(path.dirname(first.paths[0]))).resolves.toHaveLength(1);
+    await expect(fsp.readFile(first.paths[0], 'utf8')).resolves.toBe('second');
   });
 
   it('touches the filesystem only when something is attached', async () => {

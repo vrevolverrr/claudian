@@ -217,7 +217,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     active: ActiveRun,
     request: ProviderExecutionRequest,
   ): Promise<void> {
-    let images: Awaited<ReturnType<typeof materializeAgyImages>> | null = null;
     try {
       const settings = this.host.settings as unknown as Record<string, unknown>;
       const cliPath = this.cliResolver.resolveFromSettings(settings);
@@ -235,7 +234,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         .filter((block): block is { readonly type: 'image'; readonly image: ImageAttachment } =>
           block.type === 'image')
         .map((block) => block.image);
-      images = await materializeAgyImages(
+      const images = await materializeAgyImages(
         attachments,
         this.config.vaultWorkingDirectory,
       );
@@ -254,8 +253,11 @@ export class AgyExecutionSession implements ProviderExecutionSession {
       }
 
       this.emitRequested(active, { accepted: true, type: 'turn_started' });
+      // What the user wrote, not what was sent. System instructions, replayed
+      // history and attachment paths are transport detail, and agy already
+      // records the full prompt in its own conversation state.
       this.emitRequested(active, {
-        content: prompt,
+        content: getAgyInputText(request),
         type: 'user_message_started',
       });
 
@@ -304,8 +306,6 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         recoverable: true,
         type: 'execution_error',
       });
-    } finally {
-      await images?.cleanup();
     }
   }
 
@@ -531,17 +531,21 @@ export function resolveAgyPermissionFlags(
   }
 }
 
-export function buildAgyPrompt(
-  request: ProviderExecutionRequest,
-  replayHistory: boolean,
-  imagePaths: readonly string[] = [],
-): string {
-  const text = request.input
+export function getAgyInputText(request: ProviderExecutionRequest): string {
+  return request.input
     .filter((block): block is { readonly type: 'text'; readonly text: string } =>
       block.type === 'text')
     .map((block) => block.text)
     .join('\n\n')
     .trim();
+}
+
+export function buildAgyPrompt(
+  request: ProviderExecutionRequest,
+  replayHistory: boolean,
+  imagePaths: readonly string[] = [],
+): string {
+  const text = getAgyInputText(request);
 
   if (!text && imagePaths.length === 0) return '';
 
