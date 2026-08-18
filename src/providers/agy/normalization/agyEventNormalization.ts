@@ -7,7 +7,7 @@ import type {
   ProviderTurnCompletedEvent,
   ProviderUsageUpdatedEvent,
 } from '../../../core/execution';
-import type { AgyStepUpdate, AgyStreamEvent, AgyUsage } from '../runtime/agyStream';
+import type { AgyStepUpdate, AgyStreamEvent, AgySubagent, AgyUsage } from '../runtime/agyStream';
 import { buildAgyUsageInfo } from '../runtime/buildAgyUsageInfo';
 import { normalizeAgyToolInput, normalizeAgyToolName } from './agyToolNormalization';
 
@@ -78,6 +78,10 @@ export class AgyEventNormalizer {
       return this.normalizeToolStep(step);
     }
 
+    if (step.step_type === 'subagent') {
+      return this.normalizeSubagentStep(step);
+    }
+
     if (step.step_type === 'agent_response' && typeof step.text_delta === 'string'
       && step.text_delta.length > 0) {
       const events: AgyNormalizedEvent[] = [];
@@ -90,7 +94,11 @@ export class AgyEventNormalizer {
     }
 
     // user_input is already rendered locally; checkpoint and unknown steps
-    // carry no user-visible content.
+    // carry no user-visible content. system_message is dropped on purpose: it
+    // marks the point where a delegated subagent reported back, and the report
+    // itself arrives as the next agent_response, so a notice would only
+    // duplicate text the user is about to read. Its payload is step_index and
+    // state and nothing else.
     return [];
   }
 
@@ -126,6 +134,45 @@ export class AgyEventNormalizer {
       toolScope: { kind: 'main' },
       type: 'tool_completed',
     }];
+  }
+
+  /**
+   * agy delegates through a `subagent` step, not a `tool` step, so the payload
+   * sits in `subagent_info.subagents[]` and `tool_info` is absent.
+   *
+   * Each delegation renders as its own Agent tool call. The DONE state fires as
+   * soon as agy accepts the delegation — a fraction of a second — not when the
+   * subagent finishes; its findings come back later in the turn as parent
+   * text, preceded by a `system_message` step. The subagent's own steps run in
+   * a separate agy conversation and never reach this stream, so the card
+   * carries the delegation only, never a nested transcript.
+   */
+  private normalizeSubagentStep(step: AgyStepUpdate): AgyNormalizedEvent[] {
+    const subagents = step.subagent_info?.subagents ?? [];
+    if (subagents.length === 0) return [];
+
+    const name = normalizeAgyToolName(step.tool_name ?? 'invoke_subagent');
+
+    if (step.state === 'ACTIVE') {
+      return subagents.map((subagent, index) => ({
+        input: buildAgySubagentInput(subagent),
+        name,
+        toolCallId: subagentToolCallId(step.step_index, index),
+        toolScope: { kind: 'main' as const },
+        type: 'tool_started' as const,
+      }));
+    }
+
+    const isError = step.state === 'ERROR';
+    return subagents.map((subagent, index) => ({
+      content: isError
+        ? 'agy could not start the subagent.'
+        : `Delegated to ${subagent.type_name ?? 'a'} subagent.`,
+      isError,
+      toolCallId: subagentToolCallId(step.step_index, index),
+      toolScope: { kind: 'main' as const },
+      type: 'tool_completed' as const,
+    }));
   }
 
   private normalizeResult(
@@ -166,4 +213,22 @@ export class AgyEventNormalizer {
     });
     return events;
   }
+}
+
+function subagentToolCallId(stepIndex: number, subagentIndex: number): string {
+  return `agy-subagent-${stepIndex}-${subagentIndex}`;
+}
+
+/**
+ * Maps agy's subagent fields onto the keys the Agent tool renderer reads.
+ * `role` is the human-written title of the delegation and `type_name` the agy
+ * subagent family, so the description names both when they differ.
+ */
+function buildAgySubagentInput(subagent: AgySubagent): Record<string, unknown> {
+  const description = subagent.role ?? subagent.type_name ?? 'Subagent task';
+  return {
+    description,
+    ...(subagent.initial_prompt === undefined ? {} : { prompt: subagent.initial_prompt }),
+    ...(subagent.type_name === undefined ? {} : { subagent_type: subagent.type_name }),
+  };
 }

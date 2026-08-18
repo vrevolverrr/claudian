@@ -105,6 +105,67 @@ describe('AgyEventNormalizer', () => {
     });
   });
 
+  describe('a turn that delegated to a subagent', () => {
+    const events = replay('subagent-turn.jsonl');
+
+    it('renders the delegation as an Agent tool call', () => {
+      const started = ofType(events, 'tool_started');
+
+      expect(started).toHaveLength(1);
+      expect(started[0].name).toBe('Agent');
+      expect(started[0].input).toEqual({
+        description: 'Directory & README Researcher',
+        prompt: expect.stringContaining('list the files in this directory'),
+        subagent_type: 'research',
+      });
+    });
+
+    it('completes the delegation without an error', () => {
+      const completed = ofType(events, 'tool_completed');
+
+      expect(completed).toHaveLength(1);
+      expect(completed[0].toolCallId).toBe(ofType(events, 'tool_started')[0].toolCallId);
+      expect(completed[0].isError).toBe(false);
+    });
+
+    it('keeps the subagent findings that arrive as parent text', () => {
+      const text = ofType(events, 'text_delta').map((event) => event.text).join('');
+
+      expect(text).toContain('delegated the task to a research subagent');
+      expect(text).toContain('The research subagent has completed the task');
+    });
+
+    it('emits nothing for the system_message step that precedes the findings', () => {
+      const normalizer = new AgyEventNormalizer({ contextWindow: 1_000_000 });
+
+      expect(normalizer.next({
+        event: 'step_update',
+        step_update: { state: 'DONE', step_index: 6, step_type: 'system_message' },
+      })).toEqual([]);
+    });
+
+    it('renders one Agent call per delegated subagent', () => {
+      const normalizer = new AgyEventNormalizer({ contextWindow: 1_000_000 });
+      const subagents = [{ role: 'First' }, { role: 'Second' }];
+
+      const started = normalizer.next({
+        event: 'step_update',
+        step_update: {
+          state: 'ACTIVE',
+          step_index: 3,
+          step_type: 'subagent',
+          subagent_info: { subagents },
+          tool_name: 'invoke_subagent',
+        },
+      });
+
+      expect(ofType(started, 'tool_started').map((event) => event.input.description))
+        .toEqual(['First', 'Second']);
+      expect(new Set(ofType(started, 'tool_started').map((event) => event.toolCallId)).size)
+        .toBe(2);
+    });
+  });
+
   describe('malformed input', () => {
     it('drops unparseable and unknown lines instead of throwing', () => {
       expect(parseAgyStreamLine('')).toBeNull();

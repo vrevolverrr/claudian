@@ -21,6 +21,25 @@ export interface AgyToolInfo {
   readonly error?: AgyToolError;
 }
 
+/**
+ * One delegated agy subagent, as it appears on a `subagent` step.
+ *
+ * The subagent runs in its own agy conversation, so none of its steps reach the
+ * parent stream; `conversation_id` and `log_uri` are the only handles on it.
+ */
+export interface AgySubagent {
+  readonly type_name?: string;
+  readonly role?: string;
+  readonly initial_prompt?: string;
+  readonly conversation_id?: string;
+  readonly log_uri?: string;
+  readonly workspace_uris?: readonly string[];
+}
+
+export interface AgySubagentInfo {
+  readonly subagents?: readonly AgySubagent[];
+}
+
 export interface AgyUsage {
   readonly input_tokens?: number;
   readonly output_tokens?: number;
@@ -33,12 +52,17 @@ export interface AgyStepUpdate {
   readonly conversation_id?: string;
   readonly step_index: number;
   readonly state: AgyStepState;
-  /** Observed: user_input, agent_response, tool, checkpoint, unknown. */
+  /**
+   * Observed: user_input, agent_response, tool, subagent, checkpoint,
+   * system_message, unknown.
+   */
   readonly step_type: string;
   readonly duration_seconds?: number;
   readonly usage?: AgyUsage;
   readonly tool_name?: string;
   readonly tool_info?: AgyToolInfo;
+  /** Present on `subagent` steps only; delegation never uses `tool_info`. */
+  readonly subagent_info?: AgySubagentInfo;
   readonly text_delta?: string;
 }
 

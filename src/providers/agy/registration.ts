@@ -8,6 +8,7 @@ import { agySettingsReconciler } from './env/AgySettingsReconciler';
 import { AgyExecutionBackend } from './execution/AgyExecutionBackend';
 import { AgyConversationHistoryService } from './history/AgyConversationHistoryService';
 import { getAgyProviderSettings, updateAgyProviderSettings } from './settings';
+import { agySubagentAdapter } from './subagentAdapter';
 import { agyChatUIConfig } from './ui/AgyChatUIConfig';
 
 export const agyProviderRegistration: ProviderModule = {
@@ -30,6 +31,7 @@ export const agyProviderRegistration: ProviderModule = {
       return hasStoredConfigNormalization(storedConfig, getProviderConfig(target, 'agy'));
     },
   },
+  subagentAdapter: agySubagentAdapter,
   taskResultInterpreter: NOOP_TASK_RESULT_INTERPRETER,
   workspace: agyWorkspaceRegistration,
 };
