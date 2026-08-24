@@ -644,6 +644,10 @@ export interface AgyPromptEnvironment {
  * system prompt is sent once, on the turn that creates the conversation. An
  * explicit prompt — inline edit, title generation — replaces it outright and
  * is sent every time, because those run as their own one-shot conversations.
+ *
+ * Sending it once also means a conversation never sees a section added later.
+ * A new appendix, or Collab being enabled mid-conversation, reaches only
+ * conversations created after the change; existing ones need a new chat.
  */
 function resolveAgySystemPrompt(
   request: ProviderExecutionRequest,
@@ -662,7 +666,13 @@ function resolveAgySystemPrompt(
     userName: readSetting(environment.settings.userName),
     vaultPath: environment.vaultPath,
   } satisfies SystemPromptSettings, {
-    dynamicSections: [AGY_NON_INTERACTIVE_APPENDIX, AGY_NO_ARTIFACTS_APPENDIX],
+    // The caller's sections carry Collab's runtime endpoint. agy's own two are
+    // appended rather than substituted, so enabling Collab reaches agy too.
+    dynamicSections: [
+      ...(systemInstructions.dynamicSections ?? []),
+      AGY_NON_INTERACTIVE_APPENDIX,
+      AGY_NO_ARTIFACTS_APPENDIX,
+    ],
   });
 }
 

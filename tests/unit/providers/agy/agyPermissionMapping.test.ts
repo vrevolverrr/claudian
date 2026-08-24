@@ -228,4 +228,45 @@ describe('buildAgyPrompt', () => {
 
     expect(prompt).toContain('the otter paragraph');
   });
+
+  it('forwards every selection the chat input can attach', () => {
+    const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
+      context: {
+        browserSelection: {
+          selectedText: 'the kingfisher passage',
+          source: 'surfing',
+          title: 'River survey',
+          url: 'https://example.com/survey',
+        },
+        canvasSelection: { canvasPath: 'boards/Fieldwork.canvas', nodeIds: ['node-a', 'node-b'] },
+        editorSelection: {
+          mode: 'selection',
+          notePath: 'Daily/2026-08-18.md',
+          selectedText: 'the otter paragraph',
+        },
+        linkedContent: { path: 'Daily/2026-08-18.md' },
+      },
+    }), true);
+
+    expect(prompt).toContain('the otter paragraph');
+    expect(prompt).toContain('the kingfisher passage');
+    expect(prompt).toContain('node-a, node-b');
+  });
+
+  it('keeps the caller\'s dynamic sections alongside agy\'s own', () => {
+    // Collab ships its runtime endpoint this way, and replacing rather than
+    // merging would drop it for agy alone.
+    const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
+      configuration: {
+        permissionMode: 'yolo',
+        systemInstructions: {
+          dynamicSections: ['## Collab Mode\n\nReach the runtime at http://127.0.0.1:1234.'],
+          kind: 'provider-default',
+        },
+      },
+    }), true, [], { settings: {}, vaultPath: '/vault' });
+
+    expect(prompt).toContain('Reach the runtime at http://127.0.0.1:1234.');
+    expect(prompt).toContain('ArtifactMetadata');
+  });
 });

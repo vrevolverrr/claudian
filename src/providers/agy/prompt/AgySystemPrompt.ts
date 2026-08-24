@@ -24,20 +24,28 @@ When you need a decision from the user:
  * `write_to_file` accepts `ArtifactMetadata`, and agy then requires the target
  * to sit inside the conversation's own artifact directory. A vault is nothing
  * but user-facing markdown, so the model reaches for artifact metadata on an
- * ordinary note and agy fails the whole turn while declaring permissions:
+ * ordinary note and agy fails the step while declaring permissions:
  *
  *   ... is not a valid artifact path; artifacts must be in
  *   <appDataDir>/brain/<conversation-id>/
  *
- * Nothing on the Claudian side can recover from that: the write never runs and
- * the run ends in error. Naming the rule is the only lever available.
+ * The step fails and nothing is written at that path. agy usually recovers on
+ * its own, writing the artifact into its brain directory and re-issuing the
+ * vault write without metadata, so the file does land - but the turn still
+ * ends with `status: ERROR` carrying that first failed step, which Claudian
+ * reports as a run error on a turn that otherwise succeeded. Claudian cannot
+ * redirect the artifact directory or suppress the check, so naming the rule is
+ * the only lever available.
  */
 export const AGY_NO_ARTIFACTS_APPENDIX = `## Writing Files
 
 Every file you write here is an ordinary vault file, never one of your
 artifacts. Call \`write_to_file\` with only \`TargetFile\` and \`CodeContent\`.
 
-Never pass \`ArtifactMetadata\`, and never write into your artifact or brain
-directory. Doing either fails the turn outright, because agy only accepts an
-artifact path there and a vault path is not one. Report results in your reply
-instead of in an artifact document.`;
+Never pass \`ArtifactMetadata\`. A vault path is not an artifact path, so the
+call fails validation and the write is lost.
+
+Never write into your artifact or brain directory either. That write does
+succeed, which is the trap: it puts the file somewhere outside the vault, where
+the user cannot see it. Report results in your reply instead of in an artifact
+document.`;
