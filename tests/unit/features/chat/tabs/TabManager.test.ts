@@ -14,7 +14,9 @@ const mockTabs: any[] = [];
 const mockCreateTab = jest.fn((options: Record<string, any>) => createMockTab(options));
 const mockCreateTabRuntime = jest.fn(async (options: Record<string, any>) => {
   const captureReviewableSettlement = options.captureReviewableSettlement
-    ? () => options.captureReviewableSettlement(tab)
+    ? (outcome: 'completed' | 'error' = 'completed') => (
+        options.captureReviewableSettlement(tab, outcome)
+      )
     : undefined;
   const tab = mockCreateTab({
     ...options,
@@ -27,6 +29,7 @@ const mockChooseForkTarget = jest.fn();
 function createMockTab(options: Record<string, any>): any {
   let intentAdmissionPauseDepth = 0;
   const session = {
+    activeTurn: null,
     userOwnershipRevision: 0,
     get acceptsIntents() {
       return intentAdmissionPauseDepth === 0;
@@ -47,6 +50,7 @@ function createMockTab(options: Record<string, any>): any {
     draftModel: options.conversation ? null : 'claude-default',
     executionCoordinator: {
       copyInputsForFork: jest.fn().mockResolvedValue(undefined),
+      hasBackgroundWork: false,
       notifyMayCool: jest.fn(),
       prepare: jest.fn().mockResolvedValue(undefined),
       state: 'absent',
@@ -67,6 +71,11 @@ function createMockTab(options: Record<string, any>): any {
       messages: [],
       markReviewRequired: jest.fn(),
       requiresAction: false,
+    },
+    services: {
+      subagentManager: {
+        hasActiveAsyncSubagents: jest.fn().mockReturnValue(false),
+      },
     },
     controllers: {
       conversationController: {
@@ -97,6 +106,10 @@ function createMockTab(options: Record<string, any>): any {
 
 jest.mock('@/features/chat/tabs/TabLifecycle', () => ({
   activateTab: jest.fn(),
+  commitProvisionalTab: jest.fn((tab) => {
+    tab.session.claimUserOwnership();
+    if (tab.lifecycleState === 'provisional') tab.lifecycleState = 'cold';
+  }),
   deactivateTab: jest.fn(),
   drainTabForShutdownSnapshot: (...args: unknown[]) => mockDrainTabForShutdownSnapshot(...args),
   destroyTab: (...args: unknown[]) => mockDestroyTab(...args),
@@ -267,18 +280,108 @@ describe('TabManager provider execution orchestration', () => {
     expect(target!.state.acknowledgeReview).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves the first tab inactive when activation is explicitly disabled', async () => {
+    const { manager } = createManager();
+
+    const tab = await manager.createTab(null, 'inactive-tab', { activate: false });
+
+    expect(manager.getAllTabs()).toEqual([tab]);
+    expect(manager.getActiveTab()).toBeNull();
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: null,
+      openTabs: [{
+        conversationId: null,
+        draftModel: 'claude-default',
+        tabId: 'inactive-tab',
+      }],
+    });
+  });
+
+  it('keeps the committed active tab visible while another tab is hydrating', async () => {
+    const { manager } = createManager(createPlugin({
+      getCachedConversation: jest.fn((id: string) => ({ id, providerId: 'claude' })),
+    }));
+    const initial = await manager.createTab(null, 'initial-tab');
+    const target = await manager.createTab('conversation-1', 'target-tab', {
+      activate: false,
+    });
+    const hydration = deferred<void>();
+    target!.controllers.conversationController.switchTo = jest.fn(() => hydration.promise);
+
+    const switching = manager.switchToTab(target!.id);
+    for (let attempt = 0;
+      attempt < 10
+        && (target!.controllers.conversationController.switchTo as jest.Mock).mock.calls.length === 0;
+      attempt += 1) {
+      await Promise.resolve();
+    }
+
+    expect(manager.getActiveTab()).toBe(target);
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: initial!.id,
+      openTabs: [
+        { conversationId: null, draftModel: 'claude-default', tabId: initial!.id },
+        { conversationId: 'conversation-1', tabId: target!.id },
+      ],
+    });
+
+    hydration.resolve(undefined);
+    await switching;
+
+    expect(manager.getPersistedState().activeTabId).toBe(target!.id);
+  });
+
   it('preserves the attention kind in tab bar items', async () => {
     const { manager } = createManager();
     const tab = await manager.createTab();
     Object.defineProperty(tab!.state, 'attention', {
       configurable: true,
-      value: { kind: 'review', since: 123 },
+      value: { kind: 'review', outcome: 'completed', since: 123 },
     });
 
     expect(manager.getTabBarItems()).toEqual([
       expect.objectContaining({
-        attention: { kind: 'review', since: 123 },
+        attention: { kind: 'review', outcome: 'completed', since: 123 },
         id: tab!.id,
+      }),
+    ]);
+  });
+
+  it.each([
+    ['foreground streaming', (tab: any) => { tab.state.isStreaming = true; }],
+    ['turn orchestration', (tab: any) => { tab.session.activeTurn = Promise.resolve(); }],
+    ['provider background work', (tab: any) => { tab.executionCoordinator.hasBackgroundWork = true; }],
+    ['async subagent work', (tab: any) => {
+      tab.services.subagentManager.hasActiveAsyncSubagents.mockReturnValue(true);
+    }],
+  ])('projects %s as working in tab bar items', async (_source, makeWorking) => {
+    const { manager } = createManager();
+    const tab = await manager.createTab();
+
+    makeWorking(tab);
+
+    expect(manager.getTabBarItems()).toEqual([
+      expect.objectContaining({ id: tab!.id, isWorking: true }),
+    ]);
+  });
+
+  it('keeps an unread result while projecting later work as active', async () => {
+    const { manager } = createManager();
+    const tab = await manager.createTab();
+    Object.defineProperty(tab!.state, 'attention', {
+      configurable: true,
+      value: { kind: 'review', outcome: 'completed', since: 123 },
+    });
+    Object.defineProperty(tab!.executionCoordinator, 'hasBackgroundWork', {
+      configurable: true,
+      value: true,
+    });
+
+    expect(manager.getTabBarItems()).toEqual([
+      expect.objectContaining({
+        attention: { kind: 'review', outcome: 'completed', since: 123 },
+        id: tab!.id,
+        isWorking: true,
       }),
     ]);
   });
@@ -368,11 +471,11 @@ describe('TabManager provider execution orchestration', () => {
     const activeSettlement = mockCreateTab.mock.calls[0]?.[0].captureReviewableSettlement;
     const backgroundSettlement = mockCreateTab.mock.calls[1]?.[0].captureReviewableSettlement;
 
-    activeSettlement()();
-    backgroundSettlement()();
+    activeSettlement('completed')();
+    backgroundSettlement('error')();
 
     expect(active!.state.markReviewRequired).not.toHaveBeenCalled();
-    expect(background!.state.markReviewRequired).toHaveBeenCalledTimes(1);
+    expect(background!.state.markReviewRequired).toHaveBeenCalledWith('error');
   });
 
   it('uses activity at completion and invalidates review after activation', async () => {
@@ -381,8 +484,8 @@ describe('TabManager provider execution orchestration', () => {
     const background = await manager.createTab(null, undefined, { activate: false });
     const activeSettlement = mockCreateTab.mock.calls[0]?.[0].captureReviewableSettlement;
     const backgroundSettlement = mockCreateTab.mock.calls[1]?.[0].captureReviewableSettlement;
-    const reportActiveCompletion = activeSettlement();
-    const reportBackgroundCompletion = backgroundSettlement();
+    const reportActiveCompletion = activeSettlement('completed');
+    const reportBackgroundCompletion = backgroundSettlement('completed');
 
     await manager.switchToTab(background!.id);
     await manager.switchToTab(active!.id);
@@ -735,39 +838,61 @@ describe('TabManager provider execution orchestration', () => {
     expect(mockDestroyTab).not.toHaveBeenCalled();
   });
 
-  it('rolls back an admitted tab when its creation callback fails', async () => {
+  it('does not roll back committed admission when its observer throws', async () => {
     const callbackError = new Error('Failed to render created tab');
     const onTabClosed = jest.fn();
+    const onTabCreated = jest.fn(() => {
+      throw callbackError;
+    });
     const { manager } = createManager(createPlugin(), {
       onTabClosed,
-      onTabCreated: jest.fn(() => {
-        throw callbackError;
-      }),
+      onTabCreated,
     });
 
-    await expect(manager.createTab(null, 'failed-tab')).rejects.toBe(callbackError);
+    await expect(manager.createTab(null, 'committed-tab')).resolves.toEqual(
+      expect.objectContaining({ id: 'committed-tab' }),
+    );
 
-    expect(manager.getAllTabs()).toEqual([]);
-    expect(manager.getActiveTab()).toBeNull();
-    expect(mockDestroyTab).toHaveBeenCalledWith(expect.objectContaining({ id: 'failed-tab' }));
-    expect(onTabClosed).toHaveBeenCalledWith('failed-tab');
-    expectTabMetadataReleased(manager, 'failed-tab');
+    expect(onTabCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'committed-tab' }));
+    expect(manager.getAllTabs()).toEqual([
+      expect.objectContaining({ id: 'committed-tab' }),
+    ]);
+    expect(mockDestroyTab).not.toHaveBeenCalled();
+    expect(onTabClosed).not.toHaveBeenCalled();
   });
 
   it('restores the previous active tab when activation fails after admission', async () => {
     const callbackError = new Error('Failed to render active tab');
     let rejectActivation = false;
+    let persistedDuringActivation: ReturnType<TabManager['getPersistedState']> | null = null;
+    const onTabCreated = jest.fn();
     const onActiveTabChanged = jest.fn((_previousId: string | null, nextId: string) => {
-      if (rejectActivation && nextId === 'failed-tab') throw callbackError;
+      if (rejectActivation && nextId === 'failed-tab') {
+        persistedDuringActivation = manager.getPersistedState();
+        throw callbackError;
+      }
     });
-    const { manager } = createManager(createPlugin(), { onActiveTabChanged });
+    const { manager } = createManager(createPlugin(), {
+      onActiveTabChanged,
+      onTabCreated,
+    });
     const retained = await manager.createTab();
+    onTabCreated.mockClear();
     rejectActivation = true;
 
     await expect(manager.createTab(null, 'failed-tab')).rejects.toBe(callbackError);
 
     expect(manager.getAllTabs()).toEqual([retained]);
     expect(manager.getActiveTab()).toBe(retained);
+    expect(persistedDuringActivation).toEqual({
+      activeTabId: retained!.id,
+      openTabs: [{
+        conversationId: null,
+        draftModel: 'claude-default',
+        tabId: retained!.id,
+      }],
+    });
+    expect(onTabCreated).not.toHaveBeenCalled();
     expect(mockDestroyTab).toHaveBeenCalledWith(expect.objectContaining({ id: 'failed-tab' }));
     expectTabMetadataReleased(manager, 'failed-tab');
   });
@@ -863,7 +988,7 @@ describe('TabManager provider execution orchestration', () => {
     expect(manager.getActiveTab()).toBe(initial);
   });
 
-  it('republishes the predecessor when a tab switch rolls back', async () => {
+  it('does not roll back a committed switch when its completion observer throws', async () => {
     const switchError = new Error('Failed to publish completed switch');
     const onActiveTabChanged = jest.fn();
     const onTabSwitched = jest.fn((_previousId: string | null, nextId: string) => {
@@ -873,17 +998,16 @@ describe('TabManager provider execution orchestration', () => {
       onActiveTabChanged,
       onTabSwitched,
     });
-    const predecessor = await manager.createTab(null, 'predecessor-tab');
+    await manager.createTab(null, 'predecessor-tab');
     const target = await manager.createTab(null, 'target-tab', { activate: false });
     onActiveTabChanged.mockClear();
     onTabSwitched.mockClear();
 
-    await expect(manager.switchToTab(target!.id)).rejects.toBe(switchError);
+    await expect(manager.switchToTab(target!.id)).resolves.toBeUndefined();
 
-    expect(manager.getActiveTab()).toBe(predecessor);
+    expect(manager.getActiveTab()).toBe(target);
     expect(onActiveTabChanged.mock.calls).toEqual([
       ['predecessor-tab', 'target-tab'],
-      ['target-tab', 'predecessor-tab'],
     ]);
   });
 
@@ -1220,6 +1344,26 @@ describe('TabManager provider execution orchestration', () => {
     await manager.destroy();
   });
 
+  it('does not invent a snapshot owner for intentionally inactive restored shells', async () => {
+    const { manager } = createManager();
+    const first = await manager.createTab(null, 'restored-1', { activate: false });
+    const second = await manager.createTab(null, 'restored-2', { activate: false });
+
+    manager.beginShutdown();
+    await manager.drainForShutdownSnapshot();
+
+    expect(manager.getActiveTab()).toBeNull();
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: null,
+      openTabs: [
+        { conversationId: null, draftModel: 'claude-default', tabId: first!.id },
+        { conversationId: null, draftModel: 'claude-default', tabId: second!.id },
+      ],
+    });
+    manager.sealShutdownSnapshot();
+    await manager.destroy();
+  });
+
   it('drains in-flight conversation navigation before sealing shutdown state', async () => {
     const { manager } = createManager();
     const tab = await manager.createTab();
@@ -1432,6 +1576,162 @@ describe('TabManager provider execution orchestration', () => {
     expect(mockDestroyTab).toHaveBeenCalledWith(first);
   });
 
+  it('captures every open tab and the actual active tab regardless of lifecycle', async () => {
+    const getCachedConversation = jest.fn((id: string) => ({
+      id,
+      providerId: 'claude',
+    }));
+    const { manager } = createManager(createPlugin({ getCachedConversation }));
+    const retained = await manager.createTab('conversation-1');
+    const blank = await manager.createTab(null, undefined, { activate: false });
+    blank!.draftModel = 'codex:gpt-5';
+    const preview = await manager.createTab('conversation-2', undefined, {
+      lifecycleState: 'provisional',
+    });
+
+    expect(manager.getPersistedState()).toEqual({
+      openTabs: [
+        { tabId: retained!.id, conversationId: 'conversation-1' },
+        { tabId: blank!.id, conversationId: null, draftModel: 'codex:gpt-5' },
+        { tabId: preview!.id, conversationId: 'conversation-2' },
+      ],
+      activeTabId: preview!.id,
+    });
+  });
+
+  it('keeps provisional lifecycle changes out of its persisted shell', async () => {
+    const { manager } = createManager();
+    const preview = await manager.createTab(null, undefined, {
+      lifecycleState: 'provisional',
+    });
+
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: preview!.id,
+      openTabs: [{
+        conversationId: null,
+        draftModel: 'claude-default',
+        tabId: preview!.id,
+      }],
+    });
+
+    preview!.session.claimUserOwnership();
+    preview!.lifecycleState = 'cold';
+
+    expect(preview!.lifecycleState).toBe('cold');
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: preview!.id,
+      openTabs: [{
+        conversationId: null,
+        draftModel: 'claude-default',
+        tabId: preview!.id,
+      }],
+    });
+  });
+
+  it('does not treat teardown lifecycle as a committed membership removal', async () => {
+    const { manager } = createManager();
+    const tab = await manager.createTab(null, 'tearing-down-tab');
+
+    tab!.lifecycleState = 'closing';
+
+    expect(manager.getPersistedState()).toEqual({
+      activeTabId: tab!.id,
+      openTabs: [{
+        conversationId: null,
+        draftModel: 'claude-default',
+        tabId: tab!.id,
+      }],
+    });
+  });
+
+  it('publishes every successful inactive admission after the transaction', async () => {
+    const onTabCreated = jest.fn();
+    const { manager } = createManager(createPlugin(), { onTabCreated });
+    await manager.createTab();
+    onTabCreated.mockClear();
+
+    const background = await manager.createTab(null, 'background-tab', {
+      activate: false,
+    });
+    const preview = await manager.createTab(null, 'preview-tab', {
+      activate: false,
+      lifecycleState: 'provisional',
+    });
+
+    expect(background?.id).toBe('background-tab');
+    expect(preview?.id).toBe('preview-tab');
+    expect(onTabCreated.mock.calls).toEqual([
+      [background],
+      [preview],
+    ]);
+  });
+
+  it('publishes active selection only after switching an admitted tab', async () => {
+    const onActiveTabCommitted = jest.fn();
+    const { manager } = createManager(
+      createPlugin(),
+      { onActiveTabCommitted } as any,
+    );
+    const initial = await manager.createTab(null, 'initial-tab');
+    const background = await manager.createTab(null, 'background-tab', {
+      activate: false,
+    });
+    onActiveTabCommitted.mockClear();
+
+    await manager.switchToTab(background!.id);
+
+    expect(manager.getActiveTab()).toBe(background);
+    expect(onActiveTabCommitted).toHaveBeenCalledWith(initial!.id, background!.id);
+  });
+
+  it('publishes persisted blank-tab model changes', async () => {
+    const onTabDraftChanged = jest.fn();
+    const { manager } = createManager(createPlugin(), { onTabDraftChanged });
+    const tab = await manager.createTab();
+    const onDraftModelChanged = mockCreateTabRuntime.mock.calls[0]?.[0]
+      .onDraftModelChanged as (runtime: any, model: string | null) => void;
+
+    tab!.draftModel = 'claude-alternate';
+    onDraftModelChanged(tab, tab!.draftModel);
+
+    expect(onTabDraftChanged).toHaveBeenCalledWith(tab!.id, 'claude-alternate');
+  });
+
+  it('restores open tab shells cold in order and activates once at the end', async () => {
+    const getCachedConversation = jest.fn((id: string) => ({
+      id,
+      providerId: 'claude',
+    }));
+    const onActiveTabChanged = jest.fn();
+    const { manager } = createManager(
+      createPlugin({ getCachedConversation }),
+      { onActiveTabChanged },
+    );
+
+    await manager.restoreState({
+      openTabs: [
+        { tabId: 'restored-1', conversationId: 'conversation-1' },
+        { tabId: 'restored-2', conversationId: null, draftModel: 'codex:gpt-5' },
+      ],
+      activeTabId: 'restored-2',
+    });
+
+    expect(manager.getAllTabs().map(tab => ({
+      id: tab.id,
+      lifecycleState: tab.lifecycleState,
+    }))).toEqual([
+      { id: 'restored-1', lifecycleState: 'cold' },
+      { id: 'restored-2', lifecycleState: 'cold' },
+    ]);
+    expect(manager.getActiveTabId()).toBe('restored-2');
+    expect(onActiveTabChanged).toHaveBeenCalledTimes(1);
+    expect(mockCreateTabRuntime.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      draftModel: 'codex:gpt-5',
+      lifecycleState: 'cold',
+      tabId: 'restored-2',
+    }));
+  });
+
   it('runs command discovery without a runtime or provider session', async () => {
     const { manager } = createManager();
     await manager.createTab();
@@ -1563,15 +1863,19 @@ describe('TabManager provider execution orchestration', () => {
   });
 
   it('copies the accepted input ledger when forking', async () => {
-    const { manager, plugin } = createManager(createPlugin({
-      getCachedConversation: jest.fn().mockReturnValue({
+    const sourceConversation = {
         id: 'source-conversation',
+        linkedContentPath: 'Projects',
         providerId: 'claude',
-      }),
+    };
+    const { manager, plugin } = createManager(createPlugin({
+      getCachedConversation: jest.fn().mockReturnValue(sourceConversation),
+      getConversationSync: jest.fn().mockReturnValue(sourceConversation),
     }));
     const source = await manager.createTab('source-conversation');
 
     await manager.forkToNewTab({
+      linkedContentPath: 'Projects',
       messages: [],
       providerId: 'claude',
       resumeAt: 'assistant-checkpoint',
@@ -1584,6 +1888,10 @@ describe('TabManager provider execution orchestration', () => {
       'forked',
       'assistant-checkpoint',
     );
+    expect(plugin.createConversation).toHaveBeenCalledWith(expect.objectContaining({
+      linkedContentPath: 'Projects',
+      providerId: 'claude',
+    }));
     expect(plugin.updateConversation).toHaveBeenCalledWith(
       'forked',
       expect.objectContaining({ providerState: { fork: true } }),
@@ -1700,7 +2008,7 @@ describe('TabManager provider execution orchestration', () => {
     expect(manager.getTabCount()).toBe(2);
   });
 
-  it('deletes a fork conversation when post-admission setup rolls its tab back', async () => {
+  it('keeps a forked tab when its post-commit observer throws', async () => {
     const callbackError = new Error('Failed to render fork tab');
     let rejectForkTab = false;
     const onTabCreated = jest.fn(() => {
@@ -1710,16 +2018,17 @@ describe('TabManager provider execution orchestration', () => {
     const source = await manager.createTab();
     rejectForkTab = true;
 
-    await expect(manager.forkToNewTab({
+    const forkedTab = await manager.forkToNewTab({
       messages: [],
       providerId: 'claude',
       resumeAt: 'assistant-checkpoint',
       sourceConversationId: null,
       sourceSessionId: 'native-session',
-    }, source)).rejects.toBe(callbackError);
+    }, source);
 
-    expect(manager.getAllTabs()).toEqual([source]);
-    expect(plugin.deleteConversation).toHaveBeenCalledWith('forked');
+    expect(forkedTab).not.toBeNull();
+    expect(manager.getAllTabs()).toHaveLength(2);
+    expect(plugin.deleteConversation).not.toHaveBeenCalled();
   });
 
   it('ignores owner intents retained by a tab after it begins closing', async () => {

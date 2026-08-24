@@ -336,6 +336,7 @@ function installTransitionController(
     getMessagesEl: () => tab.dom.messagesEl,
     getInputEl: () => tab.dom.inputEl,
     getFileContextManager: () => null,
+    getLinkedContentController: () => tab.ui.linkedContentController,
     getImageContextManager: () => null,
     getExternalContextSelector: () => null,
     clearQueuedMessage: jest.fn(),
@@ -398,6 +399,32 @@ describe('Tab provider execution ownership', () => {
 
     expect(tab.executionCoordinator).toBe(coordinatorInstances[0]);
     expect(coordinatorInstances).toHaveLength(1);
+  });
+
+  it('publishes work changes from turn, provider-background, and async-subagent owners', async () => {
+    const onWorkChanged = jest.fn();
+    const tab = await createTestTab({
+      plugin: createPlugin(),
+      containerEl: createMockEl() as any,
+      onWorkChanged,
+    });
+
+    tab.session.activeTurn = Promise.resolve();
+    tab.session.activeTurn = null;
+    coordinatorDeps[0].onBackgroundWorkChanged?.(true);
+    tab.services.subagentManager.refreshAsyncSubagent({
+      asyncStatus: 'running',
+      description: 'Background',
+      id: 'task-1',
+      isExpanded: false,
+      mode: 'async',
+      prompt: '',
+      status: 'running',
+      toolCalls: [],
+    });
+
+    expect(onWorkChanged).toHaveBeenCalledTimes(4);
+    expect(onWorkChanged).toHaveBeenCalledWith(tab);
   });
 
   it('lets later navigation override bottom auto-scroll intent', async () => {
@@ -578,6 +605,80 @@ describe('Tab provider execution ownership', () => {
     expect(tab.state.autoScrollEnabled).toBe(false);
   });
 
+  it('re-arms auto-scroll when a streaming user manually returns to the bottom', async () => {
+    jest.useFakeTimers();
+    try {
+      const tab = await createTestTab({
+        plugin: createPlugin(),
+        containerEl: createMockEl() as any,
+      });
+      tab.state.isStreaming = true;
+      tab.dom.messagesEl.scrollHeight = 1_000;
+      tab.dom.messagesEl.clientHeight = 500;
+      tab.dom.messagesEl.scrollTop = 500;
+
+      tab.dom.messagesEl.dispatchEvent({ type: 'wheel' });
+      tab.dom.messagesEl.scrollTop = 250;
+      tab.dom.messagesEl.dispatchEvent('scroll');
+
+      expect(tab.state.autoScrollEnabled).toBe(false);
+
+      tab.dom.messagesEl.scrollTop = 500;
+      tab.dom.messagesEl.dispatchEvent('scroll');
+
+      expect(tab.state.autoScrollEnabled).toBe(true);
+
+      tab.dom.messagesEl.scrollHeight = 1_200;
+      await tab.controllers.streamController.handleStreamChunk(
+        { type: 'text', content: 'continued' },
+        { content: '', role: 'assistant' },
+      );
+      jest.advanceTimersByTime(16);
+
+      expect(tab.dom.messagesEl.scrollTop).toBe(1_200);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps auto-scroll armed during downward wheel momentum at the bottom', async () => {
+    jest.useFakeTimers();
+    try {
+      const tab = await createTestTab({
+        plugin: createPlugin(),
+        containerEl: createMockEl() as any,
+      });
+      tab.state.isStreaming = true;
+      tab.dom.messagesEl.scrollHeight = 1_000;
+      tab.dom.messagesEl.clientHeight = 500;
+      tab.dom.messagesEl.scrollTop = 250;
+      tab.state.autoScrollEnabled = false;
+
+      tab.dom.messagesEl.dispatchEvent({ type: 'wheel', deltaY: 120 });
+      tab.dom.messagesEl.scrollTop = 500;
+      tab.dom.messagesEl.dispatchEvent('scroll');
+
+      expect(tab.state.autoScrollEnabled).toBe(true);
+
+      for (let index = 0; index < 3; index++) {
+        tab.dom.messagesEl.dispatchEvent({ type: 'wheel', deltaY: 120 });
+      }
+
+      expect(tab.state.autoScrollEnabled).toBe(true);
+
+      tab.dom.messagesEl.scrollHeight = 1_200;
+      await tab.controllers.streamController.handleStreamChunk(
+        { type: 'text', content: 'continued' },
+        { content: '', role: 'assistant' },
+      );
+      jest.advanceTimersByTime(16);
+
+      expect(tab.dom.messagesEl.scrollTop).toBe(1_200);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does not let a pending bottom re-arm override newer navigation', async () => {
     jest.useFakeTimers();
     try {
@@ -593,6 +694,7 @@ describe('Tab provider execution ownership', () => {
 
       tab.dom.messagesEl.dispatchEvent('scroll');
       tab.dom.messagesWrapperEl.querySelector('.claudian-nav-btn-top')?.click();
+      tab.dom.messagesEl.dispatchEvent({ type: 'wheel', deltaY: 120 });
       jest.advanceTimersByTime(150);
 
       expect(tab.state.autoScrollEnabled).toBe(false);
@@ -690,7 +792,7 @@ describe('Tab provider execution ownership', () => {
       expect(tab?.ui.externalContextSelector).not.toBeNull();
       expect(tab?.ui.permissionToggle).not.toBeNull();
       expect(tab?.ui.serviceTierToggle).not.toBeNull();
-      expect(tab?.ui.slashCommandDropdown).not.toBeNull();
+      expect(tab?.ui.composerDropdown).not.toBeNull();
       expect(tab?.ui.instructionModeManager).not.toBeNull();
       expect(tab?.ui.contextUsageMeter).not.toBeNull();
       expect(tab?.ui.statusPanel).not.toBeNull();
@@ -932,7 +1034,12 @@ describe('Tab provider execution ownership', () => {
       observe: jest.fn(),
     })) as unknown as typeof ResizeObserver;
     const plugin = createPlugin();
-    const tab = await createTestTab({ plugin, containerEl: createMockEl() as any });
+    const onDraftModelChanged = jest.fn();
+    const tab = await createTestTab({
+      plugin,
+      containerEl: createMockEl() as any,
+      onDraftModelChanged,
+    });
     const modelOptions = Array.from(
       tab.dom.inputWrapper.querySelectorAll(
         '.claudian-model-option',
@@ -950,6 +1057,7 @@ describe('Tab provider execution ownership', () => {
       providerId: 'claude',
       model: 'claude-alternate',
     });
+    expect(onDraftModelChanged).toHaveBeenCalledWith(tab, 'claude-alternate');
     globalThis.ResizeObserver = originalResizeObserver;
   });
 
@@ -1907,10 +2015,11 @@ describe('Tab provider execution ownership', () => {
   it('routes async subagent completion without transcript mutation', async () => {
     const plugin = createPlugin();
     const onReviewableSettlement = jest.fn();
+    const captureReviewableSettlement = jest.fn(() => onReviewableSettlement);
     const tab = await createTestTab({
       plugin,
       containerEl: createMockEl() as any,
-      captureReviewableSettlement: () => onReviewableSettlement,
+      captureReviewableSettlement,
     });
     const handleAsyncSubagentCompletion = jest.fn().mockResolvedValue(true);
     tab.controllers.streamController = { handleAsyncSubagentCompletion } as any;
@@ -1940,6 +2049,7 @@ describe('Tab provider execution ownership', () => {
       type: 'async_subagent_completion',
     });
     expect(tab.controllers.conversationController!.save).toHaveBeenCalledWith(true);
+    expect(captureReviewableSettlement).toHaveBeenCalledWith(tab, 'completed');
     expect(onReviewableSettlement).toHaveBeenCalledTimes(1);
   });
 

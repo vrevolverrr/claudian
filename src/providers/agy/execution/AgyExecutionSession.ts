@@ -26,7 +26,7 @@ import { appendBrowserContext } from '../../../utils/browser';
 import { appendCanvasContext } from '../../../utils/canvas';
 import {
   appendContextFiles,
-  appendCurrentNote,
+  appendLinkedContent,
 } from '../../../utils/context';
 import { appendEditorContext } from '../../../utils/editor';
 import { getEnhancedPath, parseEnvironmentVariables } from '../../../utils/env';
@@ -662,9 +662,7 @@ function resolveAgySystemPrompt(
     userName: readSetting(environment.settings.userName),
     vaultPath: environment.vaultPath,
   } satisfies SystemPromptSettings, {
-    appendices: [AGY_NON_INTERACTIVE_APPENDIX, AGY_NO_ARTIFACTS_APPENDIX],
-    // agy brings its own tools and its own names for them.
-    toolGuidanceProfile: 'provider-native',
+    dynamicSections: [AGY_NON_INTERACTIVE_APPENDIX, AGY_NO_ARTIFACTS_APPENDIX],
   });
 }
 
@@ -685,9 +683,9 @@ export function buildAgyPrompt(
   const systemPrompt = resolveAgySystemPrompt(request, replayHistory, environment);
   let prompt = systemPrompt ? `${systemPrompt}\n\n${text}` : text;
   const context = request.context;
-  const currentNotePath = context?.currentNote?.path;
-  if (currentNotePath) {
-    prompt = appendCurrentNote(prompt, currentNotePath);
+  const linkedContentPath = context?.linkedContent?.path;
+  if (linkedContentPath) {
+    prompt = appendLinkedContent(prompt, linkedContentPath);
   }
   // The chat input builds all four together, so dropping the selections keeps
   // the note path while silently losing what the user actually pointed at.

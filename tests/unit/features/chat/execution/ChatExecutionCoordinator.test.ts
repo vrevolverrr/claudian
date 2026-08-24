@@ -215,7 +215,7 @@ function createSubmission(overrides: Partial<ChatTurnSubmission> = {}): ChatTurn
     canonicalText: 'canonical input',
     images: [],
     context: {
-      currentNote: { path: 'note.md', content: 'note' },
+      linkedContent: { path: 'note.md', content: 'note' },
       externalContextPaths: ['/external'],
     },
     conversationHistory: [],
@@ -229,6 +229,7 @@ function createSubmission(overrides: Partial<ChatTurnSubmission> = {}): ChatTurn
 }
 
 function createHarness(options: {
+  onBackgroundWorkChanged?: (isWorking: boolean) => void;
   onError?: (error: unknown) => void;
   onRequestedEvent?: (
     event: ProviderExecutionEvent,
@@ -296,6 +297,7 @@ function createHarness(options: {
       sessionEventContexts.push(context);
       return options.onSessionEvent?.(event, context);
     },
+    onBackgroundWorkChanged: options.onBackgroundWorkChanged,
     onError: options.onError,
     resolveMissingProviderSession: missingSession,
     ...(options.warmExecution ? { warmExecution: options.warmExecution } : {}),
@@ -810,6 +812,12 @@ describe('ChatExecutionCoordinator', () => {
       timestamp: 124,
     };
     const submission = createSubmission({
+      configuration: {
+        systemInstructions: {
+          dynamicSections: ['## Collab Mode\nRuntime guidance.'],
+          kind: 'provider-default',
+        },
+      },
       images: [image],
       messages: { user: userMessage, assistant: assistantMessage },
     });
@@ -824,8 +832,10 @@ describe('ChatExecutionCoordinator', () => {
       canonicalText: 'canonical input',
       localMessageId: 'user-1',
       images: [image],
-      context: { currentNote: { path: 'note.md', content: 'note' } },
+      context: { linkedContent: { path: 'note.md', content: 'note' } },
     });
+    expect(harness.repository.stageConversationInput.mock.calls[0][1])
+      .not.toHaveProperty('systemInstructions');
     expect(session.requests[0]).toMatchObject({
       input: [
         { type: 'text', text: 'canonical input' },
@@ -1770,7 +1780,8 @@ describe('ChatExecutionCoordinator', () => {
   });
 
   it('routes correlated background turns, persists their snapshots, and rejects stale output', async () => {
-    const harness = createHarness();
+    const onBackgroundWorkChanged = jest.fn();
+    const harness = createHarness({ onBackgroundWorkChanged });
     await harness.coordinator.bindConversation({
       conversationId: 'conversation-1',
       providerId: 'claude',
@@ -1791,6 +1802,8 @@ describe('ChatExecutionCoordinator', () => {
     };
 
     session.emit({ type: 'background_turn_started', scope: backgroundScope });
+    expect(harness.coordinator.hasBackgroundWork).toBe(true);
+    expect(onBackgroundWorkChanged).toHaveBeenLastCalledWith(true);
     session.emit({
       type: 'text_delta',
       scope: { ...backgroundScope, sequence: 2 },
@@ -1806,6 +1819,8 @@ describe('ChatExecutionCoordinator', () => {
       scope: { ...backgroundScope, sequence: 4 },
       reason: 'completed',
     });
+    expect(harness.coordinator.hasBackgroundWork).toBe(false);
+    expect(onBackgroundWorkChanged).toHaveBeenLastCalledWith(false);
     session.emit({
       type: 'text_delta',
       scope: { ...backgroundScope, sequence: 5 },

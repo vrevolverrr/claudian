@@ -21,6 +21,7 @@ import type {
   ToolCallInfo,
 } from '../../../core/types';
 import { t } from '../../../i18n/i18n';
+import { enhanceRenderedCodeFence } from '../../../shared/components/CopyableCodeFence';
 import { extractUserDisplayContent } from '../../../utils/context';
 import { formatDurationMmSs } from '../../../utils/date';
 import { processFileLinks, registerFileLinkHandler } from '../../../utils/fileLink';
@@ -33,6 +34,7 @@ import {
 } from '../../../utils/markdownMath';
 import type { FeatureHost } from '../../FeatureHost';
 import { findRewindContext } from '../rewind';
+import { ImagePreviewModal } from '../ui/ImagePreviewModal';
 import { formatConversationDirectoryTitle } from '../utils/conversationDirectoryTitle';
 import { renderCitationGroup as renderCitationBlock } from './CitationRenderer';
 import {
@@ -75,7 +77,7 @@ export class MessageRenderer {
   private forkCallback?: (messageId: string) => Promise<void>;
   private liveMessageEls = new Map<string, HTMLElement>();
   private removeFileLinkHandler: () => void;
-  private closeImageModal: (() => void) | null = null;
+  private readonly imagePreviewModal = new ImagePreviewModal();
   private isDisposed = false;
 
   constructor(
@@ -121,7 +123,7 @@ export class MessageRenderer {
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
-    this.closeImageModal?.();
+    this.imagePreviewModal.close();
     this.removeFileLinkHandler();
     this.removeFileLinkHandler = () => {};
     this.liveMessageEls.clear();
@@ -675,7 +677,13 @@ export class MessageRenderer {
     const imagesEl = containerEl.createDiv({ cls: 'claudian-message-images' });
 
     for (const image of images) {
-      const imageWrapper = imagesEl.createDiv({ cls: 'claudian-message-image' });
+      const imageWrapper = imagesEl.createEl('button', {
+        cls: 'claudian-message-image',
+        attr: {
+          'aria-label': `Preview ${image.name}`,
+          type: 'button',
+        },
+      });
       const imgEl = imageWrapper.createEl('img', {
         attr: {
           alt: image.name,
@@ -684,8 +692,7 @@ export class MessageRenderer {
 
       void this.setImageSrc(imgEl, image);
 
-      // Click to view full size
-      imgEl.addEventListener('click', () => {
+      imageWrapper.addEventListener('click', () => {
         void this.showFullImage(image);
       });
     }
@@ -696,47 +703,9 @@ export class MessageRenderer {
    */
   showFullImage(image: ImageAttachment): void {
     if (this.isDisposed) return;
-    this.closeImageModal?.();
-
-    const dataUri = `data:${image.mediaType};base64,${image.data}`;
 
     const ownerDocument = this.messagesEl.ownerDocument ?? window.document;
-    const overlay = ownerDocument.body.createDiv({ cls: 'claudian-image-modal-overlay' });
-    const modal = overlay.createDiv({ cls: 'claudian-image-modal' });
-
-    modal.createEl('img', {
-      attr: {
-        src: dataUri,
-        alt: image.name,
-      },
-    });
-
-    const closeBtn = modal.createDiv({ cls: 'claudian-image-modal-close' });
-    closeBtn.setText('\u00D7');
-
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        close();
-      }
-    };
-
-    let isClosed = false;
-    const close = () => {
-      if (isClosed) return;
-      isClosed = true;
-      ownerDocument.removeEventListener('keydown', handleEsc);
-      overlay.remove();
-      if (this.closeImageModal === close) {
-        this.closeImageModal = null;
-      }
-    };
-
-    closeBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
-    ownerDocument.addEventListener('keydown', handleEsc);
-    this.closeImageModal = close;
+    this.imagePreviewModal.open(ownerDocument, image);
   }
 
   /**
@@ -785,50 +754,7 @@ export class MessageRenderer {
       );
       await restoreDisplayOnlyCodeFences(el, displayOnlyCodeFences.fences);
 
-      // Wrap pre elements and move buttons outside scroll area
-      el.querySelectorAll('pre').forEach((pre) => {
-        // Skip if already wrapped
-        if (pre.parentElement?.classList.contains('claudian-code-wrapper')) return;
-
-        // Create wrapper
-        const wrapper = createDiv({ cls: 'claudian-code-wrapper' });
-        pre.parentElement?.insertBefore(wrapper, pre);
-        wrapper.appendChild(pre);
-
-        // Check for language class and add label
-        const code = pre.querySelector('code[class*="language-"]');
-        if (code) {
-          const match = code.className.match(/language-(\w+)/);
-          if (match) {
-            wrapper.classList.add('has-language');
-            const label = createSpan({
-              cls: 'claudian-code-lang-label',
-              text: match[1],
-            });
-            wrapper.appendChild(label);
-            label.addEventListener('click', () => {
-              runRendererAction(async () => {
-                const originalLabel = match[1];
-                if (!originalLabel) return;
-
-                try {
-                  await navigator.clipboard.writeText(code.textContent || '');
-                  label.setText('Copied!');
-                  window.setTimeout(() => label.setText(originalLabel), 1500);
-                } catch {
-                  // Clipboard API may fail in non-secure contexts
-                }
-              });
-            });
-          }
-        }
-
-        // Move Obsidian's copy button outside pre into wrapper
-        const copyBtn = pre.querySelector('.copy-code-button');
-        if (copyBtn) {
-          wrapper.appendChild(copyBtn);
-        }
-      });
+      el.querySelectorAll('pre').forEach(enhanceRenderedCodeFence);
 
       // Process wikilinks only when the source can contain them; the DOM pass is expensive.
       if (processedMarkdown.includes('[[')) {

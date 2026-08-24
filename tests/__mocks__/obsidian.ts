@@ -21,6 +21,7 @@ export class Plugin {
 export class PluginSettingTab {
   app: any;
   plugin: any;
+  settingItems: any[] = [];
   containerEl: any = {
     empty: jest.fn(),
     createEl: jest.fn().mockReturnValue({ createEl: jest.fn(), createDiv: jest.fn() }),
@@ -32,7 +33,13 @@ export class PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display() {}
+  getSettingDefinitions(): any[] {
+    return [];
+  }
+
+  update() {
+    this.settingItems = this.getSettingDefinitions();
+  }
 }
 
 export class ItemView {

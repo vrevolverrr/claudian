@@ -123,7 +123,7 @@ describe('getAgyInputText', () => {
         permissionMode: 'yolo',
         systemInstructions: { instructions: 'Answer tersely.', kind: 'explicit' },
       },
-      context: { currentNote: { path: 'Daily/2026-08-18.md' } },
+      context: { linkedContent: { path: 'Daily/2026-08-18.md' } },
     });
 
     expect(getAgyInputText(request)).toBe('summarize my notes');
@@ -155,7 +155,7 @@ describe('buildAgyPrompt', () => {
     const environment = { settings: { userName: 'Bryan' }, vaultPath: '/vault' };
 
     const first = buildAgyPrompt(request, true, [], environment);
-    expect(first).toContain('You are **Claudian**');
+    expect(first).toContain('## Runtime Context');
     expect(first).toContain('Bryan');
     expect(first).toContain('/vault');
 
@@ -176,7 +176,7 @@ describe('buildAgyPrompt', () => {
     });
 
     expect(prompt).toBe('Return only the rewritten text.\n\nsummarize my notes');
-    expect(prompt).not.toContain('You are **Claudian**');
+    expect(prompt).not.toContain('## Runtime Context');
   });
 
   it('carries explicit system instructions, which agy has no flag for', () => {
@@ -196,7 +196,7 @@ describe('buildAgyPrompt', () => {
 
   it('appends the current note path', () => {
     const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
-      context: { currentNote: { path: 'Daily/2026-08-18.md' } },
+      context: { linkedContent: { path: 'Daily/2026-08-18.md' } },
     }), true);
 
     expect(prompt).toContain('summarize my notes');
@@ -217,7 +217,7 @@ describe('buildAgyPrompt', () => {
   it('carries the editor selection, which the chat input sends beside the note path', () => {
     const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
       context: {
-        currentNote: { path: 'Daily/2026-08-18.md' },
+        linkedContent: { path: 'Daily/2026-08-18.md' },
         editorSelection: {
           mode: 'selection',
           notePath: 'Daily/2026-08-18.md',
