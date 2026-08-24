@@ -1,4 +1,5 @@
 import type {
+  ProviderExecutionContext,
   ProviderExecutionRequest,
   ProviderToolPolicy,
 } from '@/core/execution';
@@ -229,28 +230,37 @@ describe('buildAgyPrompt', () => {
     expect(prompt).toContain('the otter paragraph');
   });
 
-  it('forwards every selection the chat input can attach', () => {
-    const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
-      context: {
-        browserSelection: {
-          selectedText: 'the kingfisher passage',
-          source: 'surfing',
-          title: 'River survey',
-          url: 'https://example.com/survey',
-        },
-        canvasSelection: { canvasPath: 'boards/Fieldwork.canvas', nodeIds: ['node-a', 'node-b'] },
-        editorSelection: {
-          mode: 'selection',
-          notePath: 'Daily/2026-08-18.md',
-          selectedText: 'the otter paragraph',
-        },
-        linkedContent: { path: 'Daily/2026-08-18.md' },
+  it('forwards every field of the execution context', () => {
+    // `Required` is the enforcement, not decoration: a new field on
+    // ProviderExecutionContext stops this file compiling until it is listed,
+    // and the assertions then force it to be wired into the prompt. agy has
+    // silently dropped context fields twice; this is what notices the third.
+    const context: Required<ProviderExecutionContext> = {
+      browserSelection: {
+        selectedText: 'the kingfisher passage',
+        source: 'surfing',
+        title: 'River survey',
+        url: 'https://example.com/survey',
       },
+      canvasSelection: { canvasPath: 'boards/Fieldwork.canvas', nodeIds: ['node-a', 'node-b'] },
+      editorSelection: {
+        mode: 'selection',
+        notePath: 'Daily/2026-08-18.md',
+        selectedText: 'the otter paragraph',
+      },
+      externalContextPaths: ['/tmp/external-context'],
+      linkedContent: { path: 'Daily/2026-08-18.md' },
+    };
+
+    const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
+      context,
     }), true);
 
+    expect(prompt).toContain('Daily/2026-08-18.md');
     expect(prompt).toContain('the otter paragraph');
     expect(prompt).toContain('the kingfisher passage');
     expect(prompt).toContain('node-a, node-b');
+    expect(prompt).toContain('/tmp/external-context');
   });
 
   it('keeps the caller\'s dynamic sections alongside agy\'s own', () => {

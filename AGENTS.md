@@ -13,6 +13,7 @@ Do not assume provider parity. Check each provider's `capabilities.ts`, `registr
   - `src/core/AGENTS.md`
   - `src/features/chat/AGENTS.md`
   - `src/features/collab/AGENTS.md`
+  - `src/providers/agy/AGENTS.md`
   - `src/providers/claude/AGENTS.md`
   - `src/providers/codex/AGENTS.md`
   - `src/providers/grok/AGENTS.md`
