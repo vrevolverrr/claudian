@@ -4,13 +4,15 @@ import { AGY_CONVERSATION_STATE_KEY, getAgyState } from '../types';
 
 /**
  * agy keeps its transcript in a private conversation database this provider
- * does not read, so hydration is Claudian's own persisted messages. The only
- * provider-native identity worth carrying is agy's conversation id, which lets
- * a reopened conversation resume with `--conversation`.
+ * does not read. Replay comes from the Claudian-owned message transcript the
+ * conversation repository persists for providers with
+ * `supportsNativeHistory: false`, so this service has nothing to hydrate. The
+ * only provider-native identity worth carrying is agy's conversation id,
+ * which lets a reopened conversation resume with `--conversation`.
  */
 export class AgyConversationHistoryService implements ProviderConversationHistoryService {
   async hydrateConversationHistory(): Promise<void> {
-    // Nothing to hydrate: Claudian already persists every message it rendered.
+    // Replay is repository-owned; see the class docs.
   }
 
   resolveSessionIdForConversation(conversation: Conversation | null): string | null {

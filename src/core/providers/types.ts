@@ -26,6 +26,11 @@ export type { ProviderId } from '../types/provider';
 
 export interface ProviderCapabilities {
   providerId: ProviderId;
+  /**
+   * Whether provider-native transcripts are the replay source. When false,
+   * the conversation repository persists and rehydrates the rendered
+   * messages as Claudian's own transcript.
+   */
   supportsNativeHistory: boolean;
   supportsPlanMode: boolean;
   supportsRewind: boolean;

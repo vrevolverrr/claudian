@@ -1505,6 +1505,18 @@ export class ConversationRepository {
   private async hydrateProviderHistory(
     conversation: Conversation,
   ): Promise<void> {
+    // In-memory messages stay authoritative: the Claudian-owned transcript is
+    // only ever a snapshot of them, so it fills an empty conversation and
+    // never replaces live state after a post-turn re-hydration.
+    if (
+      this.persistsRenderedMessages(conversation.providerId)
+      && conversation.messages.length === 0
+    ) {
+      const messages = await this.persistence.loadMessages(conversation.id);
+      if (messages && messages.length > 0) {
+        conversation.messages = messages;
+      }
+    }
     const vaultPath = this.deps.getVaultPath();
     await ProviderRegistry
       .getConversationHistoryService(conversation.providerId)
@@ -1816,7 +1828,21 @@ export class ConversationRepository {
       }
       this.restoreLinkedContentIdentity(conversation);
       await this.persistence.saveMetadata(this.toSessionMetadata(conversation));
+      // Providers without native history have no transcript to replay from, so
+      // the rendered messages are persisted as Claudian's own record. An empty
+      // list is never written: an unhydrated save (pin, rename) must not
+      // overwrite the durable transcript.
+      if (
+        this.persistsRenderedMessages(conversation.providerId)
+        && conversation.messages.length > 0
+      ) {
+        await this.persistence.saveMessages(conversation.id, conversation.messages);
+      }
     });
+  }
+
+  private persistsRenderedMessages(providerId: ProviderId): boolean {
+    return !ProviderRegistry.getCapabilities(providerId).supportsNativeHistory;
   }
 
   private async canWriteConversation(
@@ -1876,6 +1902,7 @@ export class ConversationRepository {
     await this.persistence.deleteCurrentMetadata(id);
     await this.persistence.deleteLegacyMetadata(id);
     await this.persistence.deleteInputLedger(id);
+    await this.persistence.deleteMessages(id);
     this.ledgerStates.delete(id);
     this.ledgerLoadPromises.delete(id);
     this.linkedContentPathsByConversationId.delete(id);

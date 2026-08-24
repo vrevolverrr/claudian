@@ -43,6 +43,9 @@ function createRepository(conversation = createConversation()) {
     deleteInputLedger: jest.fn().mockResolvedValue(undefined),
     isDeleted: jest.fn().mockResolvedValue(false),
     markDeleted: jest.fn().mockResolvedValue(undefined),
+    loadMessages: jest.fn().mockResolvedValue(null),
+    saveMessages: jest.fn().mockResolvedValue(undefined),
+    deleteMessages: jest.fn().mockResolvedValue(undefined),
   };
   const repository = new ConversationRepository({
     getSettings: () => ({}),

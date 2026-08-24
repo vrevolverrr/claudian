@@ -15,7 +15,7 @@
 | `runtime/` | CLI resolution, launch spec, stream parsing, prompt spill, image materialization, model discovery |
 | `normalization/` | agy stream events and tool identities mapped onto Claudian's renderers |
 | `prompt/` | Appendices describing what agy cannot discover about running under Claudian |
-| `history/` | Claudian-owned replay; agy's own transcript is a private database this provider never reads |
+| `history/` | Session-id resolution only; agy's own transcript is a private database this provider never reads. Replay comes from the Claudian-owned message transcript the conversation repository persists for `supportsNativeHistory: false` providers |
 
 ## Print Mode Invariants
 

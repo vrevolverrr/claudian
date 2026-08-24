@@ -15,7 +15,7 @@
 
 | Component | Authority |
 | --- | --- |
-| `ConversationRepository` | The canonical in-memory Claudian conversation collection, hydration status, pin/archive and creation-only Linked content identity, deletion transactions, per-conversation persistence queues, input-ledger coordination, historical model recovery, selected-model availability reconciliation, and execution-snapshot binding |
+| `ConversationRepository` | The canonical in-memory Claudian conversation collection, hydration status, pin/archive and creation-only Linked content identity, deletion transactions, per-conversation persistence queues, input-ledger coordination, Claudian-owned message-transcript persistence and replay for `supportsNativeHistory: false` providers, historical model recovery, selected-model availability reconciliation, and execution-snapshot binding |
 | `SharedStorageService` | Plugin-data and vault persistence I/O plus construction of shared persistence adapters |
 | `SettingsCoordinator` | Serialization of settings mutations, rollback before failed persistence, and post-commit publication ordering |
 | `ChatModelSelectionCoordinator` | Application-wide ordering and durable settings commits for explicit future-tab model-seed intents |

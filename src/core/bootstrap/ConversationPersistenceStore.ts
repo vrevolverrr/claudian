@@ -1,11 +1,15 @@
 import type { VaultFileAdapter } from '../storage/VaultFileAdapter';
-import type { SessionMetadata } from '../types';
+import type { ChatMessage, SessionMetadata } from '../types';
 import {
   type ConversationInputLedger,
   type ConversationInputLedgerPersistence,
   type ConversationInputLedgerReadResult,
   ConversationInputLedgerStorage,
 } from './ConversationInputLedgerStorage';
+import {
+  type ConversationMessagesPersistence,
+  ConversationMessageStorage,
+} from './ConversationMessageStorage';
 import {
   assertValidSessionMetadataId,
   type SessionMetadataReader,
@@ -31,6 +35,13 @@ export interface ConversationPersistence {
     ledger: ConversationInputLedger,
   ): Promise<void>;
   saveMetadata(metadata: SessionMetadata): Promise<void>;
+  /** Claudian-owned rendered transcript for providers without native history. */
+  loadMessages(conversationId: string): Promise<ChatMessage[] | null>;
+  saveMessages(
+    conversationId: string,
+    messages: readonly ChatMessage[],
+  ): Promise<void>;
+  deleteMessages(conversationId: string): Promise<void>;
   deleteCurrentMetadata(conversationId: string): Promise<void>;
   deleteLegacyMetadata(conversationId: string): Promise<void>;
   deleteInputLedger(conversationId: string): Promise<void>;
@@ -43,11 +54,13 @@ export class ConversationPersistenceStore implements ConversationPersistence {
 
   private readonly metadataStorage: SessionStorage;
   private readonly inputLedgerStorage: ConversationInputLedgerPersistence;
+  private readonly messageStorage: ConversationMessagesPersistence;
 
   constructor(private readonly adapter: VaultFileAdapter) {
     this.metadataStorage = new SessionStorage(adapter);
     this.metadataReader = this.metadataStorage;
     this.inputLedgerStorage = new ConversationInputLedgerStorage(adapter);
+    this.messageStorage = new ConversationMessageStorage(adapter);
   }
 
   loadInputLedger(
@@ -80,6 +93,21 @@ export class ConversationPersistenceStore implements ConversationPersistence {
     return this.adapter.delete(
       this.metadataStorage.getLegacyMetadataPath(conversationId),
     );
+  }
+
+  loadMessages(conversationId: string): Promise<ChatMessage[] | null> {
+    return this.messageStorage.load(conversationId);
+  }
+
+  saveMessages(
+    conversationId: string,
+    messages: readonly ChatMessage[],
+  ): Promise<void> {
+    return this.messageStorage.save(conversationId, messages);
+  }
+
+  deleteMessages(conversationId: string): Promise<void> {
+    return this.messageStorage.delete(conversationId);
   }
 
   deleteInputLedger(conversationId: string): Promise<void> {
