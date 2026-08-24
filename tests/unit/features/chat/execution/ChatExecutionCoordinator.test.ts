@@ -2026,6 +2026,9 @@ describe('ChatExecutionCoordinator', () => {
       markDeleted: jest.fn(async () => {
         tombstoned = true;
       }),
+      loadMessages: jest.fn(async () => null),
+      saveMessages: jest.fn(async () => undefined),
+      deleteMessages: jest.fn(async () => undefined),
     } as unknown as ConversationPersistence;
     const conversation: Conversation = {
       id: 'conversation-1',
