@@ -43,7 +43,10 @@ import {
   splitAgyModelId,
 } from '../models';
 import { AgyEventNormalizer } from '../normalization/agyEventNormalization';
-import { AGY_NON_INTERACTIVE_APPENDIX } from '../prompt/AgySystemPrompt';
+import {
+  AGY_NO_ARTIFACTS_APPENDIX,
+  AGY_NON_INTERACTIVE_APPENDIX,
+} from '../prompt/AgySystemPrompt';
 import { AgyCliResolver } from '../runtime/AgyCliResolver';
 import {
   formatAgyImageReferences,
@@ -656,7 +659,7 @@ function resolveAgySystemPrompt(
     userName: readSetting(environment.settings.userName),
     vaultPath: environment.vaultPath,
   } satisfies SystemPromptSettings, {
-    appendices: [AGY_NON_INTERACTIVE_APPENDIX],
+    appendices: [AGY_NON_INTERACTIVE_APPENDIX, AGY_NO_ARTIFACTS_APPENDIX],
     // agy brings its own tools and its own names for them.
     toolGuidanceProfile: 'provider-native',
   });

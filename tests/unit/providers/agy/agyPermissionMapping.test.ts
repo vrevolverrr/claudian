@@ -202,4 +202,15 @@ describe('buildAgyPrompt', () => {
     expect(prompt).toContain('summarize my notes');
     expect(prompt).toContain('Daily/2026-08-18.md');
   });
+
+  it('tells agy that a vault write is never one of its artifacts', () => {
+    // ArtifactMetadata on a vault path fails the whole turn with
+    // "is not a valid artifact path; artifacts must be in .../brain/<id>/".
+    const prompt = buildAgyPrompt(makeRequest('yolo'), true, [], {
+      settings: {},
+      vaultPath: '/vault',
+    });
+
+    expect(prompt).toContain('ArtifactMetadata');
+  });
 });
