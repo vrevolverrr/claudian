@@ -213,4 +213,19 @@ describe('buildAgyPrompt', () => {
 
     expect(prompt).toContain('ArtifactMetadata');
   });
+
+  it('carries the editor selection, which the chat input sends beside the note path', () => {
+    const prompt = buildAgyPrompt(makeRequest('yolo', { kind: 'provider-default' }, {
+      context: {
+        currentNote: { path: 'Daily/2026-08-18.md' },
+        editorSelection: {
+          mode: 'selection',
+          notePath: 'Daily/2026-08-18.md',
+          selectedText: 'the otter paragraph',
+        },
+      },
+    }), true);
+
+    expect(prompt).toContain('the otter paragraph');
+  });
 });

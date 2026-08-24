@@ -22,10 +22,13 @@ import { getRuntimeEnvironmentText } from '../../../core/providers/providerEnvir
 import type { ProviderHost } from '../../../core/providers/ProviderHost';
 import type { ChatMessage } from '../../../core/types';
 import type { ImageAttachment } from '../../../core/types';
+import { appendBrowserContext } from '../../../utils/browser';
+import { appendCanvasContext } from '../../../utils/canvas';
 import {
   appendContextFiles,
   appendCurrentNote,
 } from '../../../utils/context';
+import { appendEditorContext } from '../../../utils/editor';
 import { getEnhancedPath, parseEnvironmentVariables } from '../../../utils/env';
 import {
   buildContextFromHistory,
@@ -681,9 +684,21 @@ export function buildAgyPrompt(
 
   const systemPrompt = resolveAgySystemPrompt(request, replayHistory, environment);
   let prompt = systemPrompt ? `${systemPrompt}\n\n${text}` : text;
-  const currentNotePath = request.context?.currentNote?.path;
+  const context = request.context;
+  const currentNotePath = context?.currentNote?.path;
   if (currentNotePath) {
     prompt = appendCurrentNote(prompt, currentNotePath);
+  }
+  // The chat input builds all four together, so dropping the selections keeps
+  // the note path while silently losing what the user actually pointed at.
+  if (context?.editorSelection) {
+    prompt = appendEditorContext(prompt, context.editorSelection);
+  }
+  if (context?.browserSelection) {
+    prompt = appendBrowserContext(prompt, context.browserSelection);
+  }
+  if (context?.canvasSelection) {
+    prompt = appendCanvasContext(prompt, context.canvasSelection);
   }
 
   const imageReferences = formatAgyImageReferences(imagePaths);
