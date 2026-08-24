@@ -64,16 +64,34 @@ describe('buildAgyLaunchSpec', () => {
   const base = {
     cliPath: '/usr/local/bin/agy',
     env: {},
-    prompt: 'hello',
     vaultWorkingDirectory: '/vault',
   };
 
-  it('always requests the machine-readable stream', () => {
+  it('reads turns from stdin so one process can serve the whole session', () => {
     const spec = buildAgyLaunchSpec({ ...base, skipPermissions: false });
 
-    expect(spec.args.slice(0, 4)).toEqual(['--print', 'hello', '--output-format', 'stream-json']);
+    expect(spec.args.slice(0, 4))
+      .toEqual(['--input-format', 'stream-json', '--output-format', 'stream-json']);
     expect(spec.cwd).toBe('/vault');
     expect(spec.command).toBe('/usr/local/bin/agy');
+  });
+
+  it('carries no prompt argument, because the prompt arrives on stdin', () => {
+    const spec = buildAgyLaunchSpec({ ...base, skipPermissions: false });
+
+    expect(spec.args).toContain('--print=');
+    expect(spec.args).not.toContain('--print');
+  });
+
+  it('keeps the empty print flag last, where agy will not read it as a prompt', () => {
+    const spec = buildAgyLaunchSpec({
+      ...base,
+      conversationId: 'abc-123',
+      externalWorkspaceRoots: ['/other'],
+      skipPermissions: true,
+    });
+
+    expect(spec.args[spec.args.length - 1]).toBe('--print=');
   });
 
   it('omits the permission override unless it was asked for', () => {

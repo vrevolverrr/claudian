@@ -1,28 +1,34 @@
 # agy Provider
 
-`src/providers/agy/` adapts Google's Antigravity CLI through `agy --print --output-format stream-json`. This provider exists only in this fork; upstream has no `src/providers/agy/`, so upstream merges never conflict here and contract drift surfaces at typecheck rather than as a merge conflict. Run `npm run typecheck` after every upstream merge before trusting a clean merge.
+`src/providers/agy/` adapts Google's Antigravity CLI through `agy --input-format stream-json --output-format stream-json`. This provider exists only in this fork; upstream has no `src/providers/agy/`, so upstream merges never conflict here and contract drift surfaces at typecheck rather than as a merge conflict. Run `npm run typecheck` after every upstream merge before trusting a clean merge.
 
 ## Dependency Boundary
 
-- agy is not an ACP provider. Do not route it through `src/providers/acp/`; print mode is a one-shot subprocess per turn with no session channel.
+- agy is not an ACP provider. Do not route it through `src/providers/acp/`; agy speaks its own NDJSON stream, not ACP, and its stdin channel carries only user turns.
 - Provider-owned conversation data stays behind `getAgyState` and `AGY_CONVERSATION_STATE_KEY`. Feature code must not inspect it.
 
 ## Ownership
 
 | Area | Owns |
 | --- | --- |
-| `execution/` | Per-turn process lifecycle, permission-flag mapping, prompt assembly, run/session state |
-| `runtime/` | CLI resolution, launch spec, stream parsing, prompt spill, image materialization, model discovery |
+| `execution/` | Session process lifecycle and reuse, permission-flag mapping, prompt assembly, run/session state |
+| `runtime/` | CLI resolution, launch spec, stream parsing, turn encoding, image materialization, model discovery |
 | `normalization/` | agy stream events and tool identities mapped onto Claudian's renderers |
 | `prompt/` | Appendices describing what agy cannot discover about running under Claudian |
 | `history/` | Session-id resolution only; agy's own transcript is a private database this provider never reads. Replay comes from the Claudian-owned message transcript the conversation repository persists for `supportsNativeHistory: false` providers |
 
 ## Print Mode Invariants
 
-- One process per turn. Continuity comes from agy's conversation id, captured from the stream and replayed as `--conversation`. There is no long-lived process to hold session state.
+- One process per session, not per turn. `--input-format stream-json` runs one turn per NDJSON line on stdin, so agy's language-server boot and `loadCodeAssist` chain are paid once. Measured on agy 1.1.19, paired on one conversation: 5.76s median per turn spawning per turn, 1.42s median reusing the process.
+- `--print` takes a value, so it is passed as `--print=` and kept last in the arg vector. Given a bare `--print`, agy consumes the next flag as the prompt and exits with `--print took "--input-format" as its prompt`.
+- The reuse key in `AgyExecutionSession` deliberately ignores `--conversation`. A live process already holds the conversation it created; keying on it would respawn on every turn after the first and give back the whole saving.
+- `user` is the only input event agy accepts. Any other event is ignored with a warning, so stdin is not a channel for answering permission requests.
+- agy exits after any errored turn, so a reused process is never left broken: a refused connection, a failed eligibility check and a print timeout each produce `result status: ERROR` followed by exit code 1, and the next turn respawns with `--conversation`. Reuse therefore needs no health check; do not add one without evidence of an error that leaves the process alive.
+- A blackholed network — connection accepted, bytes dropped, as on a wifi switch or captive portal — hangs the turn for the whole `--print-timeout` before reporting `timeout waiting for response`. Measured against agy 1.1.19: a 30s flag errored at 30.1s, a 45s flag at 45.2s. `DEFAULT_PRINT_TIMEOUT` is 10m, so that is a ten-minute silent turn. Cancellation works throughout.
+- Capture agy's conversation id from the init event, never only at the turn's terminal event. A first turn that is cancelled or dies before finishing otherwise leaves the conversation id unrecorded, and the next turn starts a second agy conversation while re-inlining the vault system prompt.
 - Print mode has no interactive channel. agy auto-denies every permission request rather than prompting, so an approval-requiring mode surfaces as failed tool steps, not as a question. `resolveAgyPermissionFlags` maps `normal` to agy's own default rather than escalating to `accept-edits`: a write is then denied and reported instead of applied unasked. Do not "fix" that by escalating.
 - agy's question tool resolves as skipped without reaching the user. `AGY_NON_INTERACTIVE_APPENDIX` says so up front; without it agy spends a turn reporting the skip before restating the options as text.
-- There is no stdin path, so a prompt past the argument limit is spilled to a file agy is told to read (`AgyPromptSpill`). Print mode also has no image input; attachments are written into the vault and referenced by path.
+- Prompts travel on stdin, so there is no argument-size ceiling: a 405KB prompt was accepted whole. Print mode still has no image input; attachments are written into the vault and referenced by path.
 - Never pass `--effort`. agy encodes reasoning effort in the model id and rejects the flag for a model that already names its effort. `resolveAgyLaunchModel` recombines the Claudian model selection and effort setting into one id, and appends an effort only when the catalog publishes that variant.
 
 ## System Prompt Delivery

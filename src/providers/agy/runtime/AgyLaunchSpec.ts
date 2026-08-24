@@ -9,7 +9,6 @@ export interface AgyLaunchSpec {
 
 export interface AgyLaunchInputs {
   readonly cliPath: string;
-  readonly prompt: string;
   readonly vaultWorkingDirectory: string;
   readonly externalWorkspaceRoots?: readonly string[];
   /** Raw agy model id, already decoded from the Claudian selection id. */
@@ -25,7 +24,15 @@ export interface AgyLaunchInputs {
 const DEFAULT_PRINT_TIMEOUT = '10m';
 
 /**
- * Builds one agy print-mode invocation.
+ * Builds one agy invocation that reads its turns from stdin.
+ *
+ * `--input-format stream-json` runs one turn per NDJSON line, so a single
+ * process serves the whole session and pays agy's language-server boot and
+ * `loadCodeAssist` chain once rather than once per turn. Reading the prompt
+ * from stdin also removes the argument-size ceiling entirely.
+ *
+ * `--print` takes a value, so it is passed as `--print=` and kept last: given
+ * a bare `--print`, agy swallows the following flag as the prompt.
  *
  * Print mode has no interactive channel, so a permission request is auto-denied
  * by agy and surfaces as a failed tool step. Every mode that writes therefore
@@ -37,8 +44,8 @@ const DEFAULT_PRINT_TIMEOUT = '10m';
  */
 export function buildAgyLaunchSpec(inputs: AgyLaunchInputs): AgyLaunchSpec {
   const args = [
-    '--print',
-    inputs.prompt,
+    '--input-format',
+    'stream-json',
     '--output-format',
     'stream-json',
     '--print-timeout',
@@ -65,6 +72,8 @@ export function buildAgyLaunchSpec(inputs: AgyLaunchInputs): AgyLaunchSpec {
     seen.add(resolved);
     args.push('--add-dir', resolved);
   }
+
+  args.push('--print=');
 
   return {
     args,

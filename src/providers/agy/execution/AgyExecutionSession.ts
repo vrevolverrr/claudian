@@ -57,9 +57,9 @@ import {
   pruneAgyAttachmentsOnce,
 } from '../runtime/AgyImageAttachments';
 import { subscribeAgyJsonlLines } from '../runtime/agyJsonlLines';
-import { buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
-import { deliverAgyPrompt } from '../runtime/AgyPromptSpill';
+import { type AgyLaunchSpec, buildAgyLaunchSpec } from '../runtime/AgyLaunchSpec';
 import { parseAgyStreamLine } from '../runtime/agyStream';
+import { encodeAgyTurnInput } from '../runtime/AgyTurnInput';
 import { getAgyProviderSettings } from '../settings';
 import { AGY_CONVERSATION_STATE_KEY, getAgyState } from '../types';
 
@@ -79,13 +79,15 @@ interface ActiveRun {
 }
 
 /**
- * One agy conversation, driven through `agy --print --output-format stream-json`.
+ * One agy conversation, driven through `agy --input-format stream-json`.
  *
- * Print mode runs one process per turn and exits when the turn ends, so the
- * session owns no long-lived process. Continuity comes from agy's conversation
- * id, which is captured from the stream and replayed as `--conversation`.
+ * The session owns one process that serves every turn: agy runs a turn per
+ * NDJSON line on stdin, so its language-server boot and `loadCodeAssist` chain
+ * are paid once for the session instead of once per turn. The process is
+ * replaced only when it dies or when the turn needs different launch flags,
+ * which is when agy's conversation id is replayed as `--conversation`.
  *
- * Print mode also has no interactive channel: agy auto-denies any permission
+ * Print mode has no interactive channel: agy auto-denies any permission
  * request rather than asking, so an approval-requiring mode surfaces as failed
  * tool steps. The permission mode is mapped to agy flags in
  * `resolveAgyPermissionFlags` and the consequence is announced once per session.
@@ -99,7 +101,10 @@ export class AgyExecutionSession implements ProviderExecutionSession {
   private disposalPromise: Promise<void> | null = null;
   private disposed = false;
   private process: ManagedStdioProcess | null = null;
+  private processConversationId: string | null = null;
+  private processKey: string | null = null;
   private settleActiveTurn: (() => void) | null = null;
+  private turnConsumer: ((line: string) => void) | null = null;
   private providerSessionId: string | null;
   private readonly runFlights = new Set<Promise<void>>();
   private revision = 0;
@@ -319,29 +324,12 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         request.configuration.reasoning,
         getEffectiveAgyModels(providerSettings.discoveredModels),
       );
-      // agy has no stdin path, so a prompt past the argument limit is spilled
-      // to a file it can read rather than failing the spawn.
-      const delivery = await deliverAgyPrompt(
-        prompt,
-        this.config.vaultWorkingDirectory,
-        active.turnId,
-      );
-      if (delivery.spilledTo) {
-        this.emitRequested(active, {
-          level: 'info',
-          message: 'This message was too large to pass to agy directly, so it '
-            + 'was written to a file for agy to read.',
-          type: 'notice',
-        });
-      }
-
       const launchSpec = buildAgyLaunchSpec({
         cliPath,
         ...(this.providerSessionId ? { conversationId: this.providerSessionId } : {}),
         env: buildAgyEnvironment(settings, cliPath),
         ...(permissionFlags.mode ? { mode: permissionFlags.mode } : {}),
         ...(model ? { model } : {}),
-        prompt: delivery.prompt,
         skipPermissions: permissionFlags.skipPermissions,
         vaultWorkingDirectory: this.config.vaultWorkingDirectory,
         ...(request.configuration.externalWorkspaceRoots
@@ -357,7 +345,7 @@ export class AgyExecutionSession implements ProviderExecutionSession {
         model,
       });
 
-      await this.streamTurn(active, launchSpec, normalizer);
+      await this.streamTurn(active, launchSpec, normalizer, prompt);
     } catch (error) {
       // A failure while preparing the turn must still terminate the run
       // stream; an unterminated run blocks the consumer and the session.
@@ -370,85 +358,210 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     }
   }
 
+  /**
+   * Runs one turn on the session's process.
+   *
+   * The turn ends at agy's terminal event and leaves the process running, so
+   * the next turn skips the boot entirely. Only a dead process or a change of
+   * launch flags costs a restart.
+   */
   private streamTurn(
     active: ActiveRun,
-    launchSpec: ReturnType<typeof buildAgyLaunchSpec>,
+    launchSpec: AgyLaunchSpec,
     normalizer: AgyEventNormalizer,
+    prompt: string,
   ): Promise<void> {
     return new Promise<void>((resolve) => {
-      const process = new ManagedStdioProcess({
-        ...launchSpec,
-        stderrBufferLimit: STDERR_BUFFER_LIMIT,
-      });
-      this.process = process;
-
       let settled = false;
-      const settle = (): void => {
-        if (settled) return;
-        settled = true;
-        this.settleActiveTurn = null;
-        resolve();
-      };
-      this.settleActiveTurn = settle;
-
       const consumeLine = (line: string): void => {
         const streamEvent = parseAgyStreamLine(line);
         if (!streamEvent) return;
 
-        for (const event of normalizer.next(streamEvent)) {
+        const events = normalizer.next(streamEvent);
+        // agy names the conversation in its init event, before the turn
+        // produces anything else. Capturing it here rather than at the turn's
+        // terminal event is what lets a cancelled or crashed first turn still
+        // leave a conversation the next turn can resume; waiting for the end
+        // of the turn loses it exactly when the turn does not reach one.
+        this.captureConversationId(normalizer, active);
+
+        for (const event of events) {
           if (!this.isActive(active)) return;
           if (event.type === 'turn_completed' || event.type === 'execution_error') {
-            this.captureConversationId(normalizer, active);
             this.finishRequested(active, event);
-            void this.shutdownProcess();
             settle();
             return;
           }
           this.emitRequested(active, event);
         }
       };
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        // Only hooks this turn still owns are cleared. A cancelled turn settles
+        // when its process finally exits, and by then the session may already be
+        // streaming a newer turn whose consumer must survive.
+        if (this.settleActiveTurn === settle) this.settleActiveTurn = null;
+        if (this.turnConsumer === consumeLine) this.turnConsumer = null;
+        resolve();
+      };
+      this.settleActiveTurn = settle;
 
-      process.onError((error) => {
-        if (this.isActive(active)) {
-          this.finishRequested(active, {
-            category: 'transport',
-            message: describeLaunchFailure(error),
-            recoverable: true,
-            type: 'execution_error',
-          });
-        }
+      if (!this.isActive(active)) {
         settle();
-      });
-
-      process.onExit(({ code, signal }) => {
-        this.captureConversationId(normalizer, active);
-        if (this.isActive(active)) {
-          this.finishRequested(active, {
-            category: 'process-exited',
-            message: formatUnexpectedExit(code, signal, process.getStderrSnapshot()),
-            recoverable: true,
-            type: 'execution_error',
-          });
-        }
-        settle();
-      });
-
-      try {
-        process.start();
-        subscribeAgyJsonlLines(process.stdout, consumeLine);
-        process.stdin.end();
-      } catch (error) {
-        if (this.isActive(active)) {
-          this.finishRequested(active, {
-            category: 'transport',
-            message: describeLaunchFailure(error),
-            recoverable: true,
-            type: 'execution_error',
-          });
-        }
-        settle();
+        return;
       }
+
+      this.turnConsumer = consumeLine;
+
+      // The consumer is wired before the process starts: agy emits its init
+      // event as soon as it is spawned, ahead of this turn reaching stdin.
+      void this.ensureProcess(active, launchSpec)
+        .then((process) => {
+          if (!process || !this.isActive(active)) {
+            settle();
+            return;
+          }
+          // The callback absorbs a broken pipe: a reused process can die
+          // between the reuse check and this write, and an unhandled stdin
+          // error event would take the plugin down rather than the turn.
+          process.stdin.write(encodeAgyTurnInput(prompt), (error) => {
+            if (!error || !this.isActive(active)) return;
+            this.finishRequested(active, {
+              category: 'transport',
+              message: `agy could not be sent the turn: ${toMessage(error)}`,
+              recoverable: true,
+              type: 'execution_error',
+            });
+            settle();
+          });
+        })
+        .catch((error: unknown) => {
+          if (this.isActive(active)) {
+            this.finishRequested(active, {
+              category: 'transport',
+              message: `agy could not be sent the turn: ${toMessage(error)}`,
+              recoverable: true,
+              type: 'execution_error',
+            });
+          }
+          settle();
+        });
     });
+  }
+
+  /**
+   * Returns the process this turn should run on, starting one when the session
+   * has none, when the previous one exited, or when the launch flags changed.
+   *
+   * The reuse key ignores `--conversation`: a live process already holds the
+   * conversation it created, and re-passing the id would restart it on every
+   * turn after the first. The conversation the process is bound to is compared
+   * separately, so a session pointed at a different conversation still respawns.
+   */
+  private async ensureProcess(
+    active: ActiveRun,
+    launchSpec: AgyLaunchSpec,
+  ): Promise<ManagedStdioProcess | null> {
+    const key = describeLaunchIdentity(launchSpec);
+    if (
+      this.process
+      && this.processKey === key
+      && this.processConversationId === this.providerSessionId
+    ) {
+      return this.process;
+    }
+
+    await this.stopProcess();
+    // Cancellation can land while the outgoing process is still stopping.
+    // Starting agy for a turn nobody is waiting on would run the prompt anyway.
+    if (!this.isActive(active)) return null;
+
+    const process = new ManagedStdioProcess({
+      ...launchSpec,
+      stderrBufferLimit: STDERR_BUFFER_LIMIT,
+    });
+    this.process = process;
+    this.processKey = key;
+    this.processConversationId = this.providerSessionId;
+
+    // Every listener below ignores a process the session has already let go of.
+    // A replaced process exits while the turn that replaced it is running, and
+    // `stopProcess` drops it before awaiting that exit, so without the guard
+    // the outgoing process fails and feeds the incoming turn.
+    process.onError((error) => {
+      if (this.process !== process) return;
+      this.failActiveTurn({
+        category: 'transport',
+        message: `agy could not be started: ${toMessage(error)}`,
+        recoverable: true,
+        type: 'execution_error',
+      });
+      this.forgetProcess(process);
+    });
+
+    process.onExit(({ code, signal }) => {
+      if (this.process !== process) return;
+      this.failActiveTurn({
+        category: 'process-exited',
+        message: formatUnexpectedExit(code, signal, process.getStderrSnapshot()),
+        recoverable: true,
+        type: 'execution_error',
+      });
+      this.forgetProcess(process);
+    });
+
+    try {
+      process.start();
+      // A failed write reports through its own callback, but Node still emits
+      // 'error' on the stream, and an unhandled one on a broken pipe takes the
+      // whole plugin down rather than the turn.
+      process.stdin.on('error', () => undefined);
+      subscribeAgyJsonlLines(process.stdout, (line) => {
+        if (this.process !== process) return;
+        this.turnConsumer?.(line);
+      });
+    } catch (error) {
+      this.forgetProcess(process);
+      if (this.isActive(active)) {
+        this.finishRequested(active, {
+          category: 'transport',
+          message: `agy could not be started: ${toMessage(error)}`,
+          recoverable: true,
+          type: 'execution_error',
+        });
+      }
+      return null;
+    }
+
+    return process;
+  }
+
+  /**
+   * Ends whatever turn the process was serving. Process failures arrive on
+   * listeners attached once at spawn, so the run they belong to is whichever
+   * one is active now rather than the one that started the process.
+   *
+   * A pending settle is what binds a turn to the process. Without one the
+   * process died between turns, and the next turn is still being prepared: it
+   * must respawn on a forgotten process rather than inherit its exit.
+   */
+  private failActiveTurn(event: WithoutScope<ProviderExecutionEvent>): void {
+    const settle = this.settleActiveTurn;
+    if (!settle) return;
+
+    const active = this.activeRun;
+    if (active && this.isActive(active)) this.finishRequested(active, event);
+    settle();
+  }
+
+  private forgetProcess(process: ManagedStdioProcess): void {
+    if (this.process !== process) return;
+    this.process = null;
+    this.processConversationId = null;
+    this.processKey = null;
+    this.turnConsumer = null;
+    this.settleActiveTurn = null;
   }
 
   private captureConversationId(
@@ -459,27 +572,47 @@ export class AgyExecutionSession implements ProviderExecutionSession {
     if (!conversationId || conversationId === this.providerSessionId) return;
 
     this.providerSessionId = conversationId;
+    this.processConversationId = conversationId;
     this.bumpRevision();
     this.emitRequestedState(active);
   }
 
+  /**
+   * Stops the session's process and ends the turn it was serving. Only
+   * cancellation and disposal take a turn down with the process; replacing a
+   * process between turns must not, so that path uses `stopProcess` instead.
+   */
   private async shutdownProcess(): Promise<void> {
-    const process = this.process;
-    if (!process) return;
-    // Both are captured before awaiting: by the time shutdown resolves the
-    // session may already own a newer turn, and settling that one would end
-    // its flight early while leaving this turn's flight pending forever.
+    // The settle runs even with no process to stop. A turn cancelled before
+    // its process exists has nothing that will ever exit on its behalf, and an
+    // unsettled turn leaves its flight pending, which hangs disposal forever.
+    //
+    // Captured before awaiting: by the time shutdown resolves the session may
+    // already own a newer turn, and settling that one would end its flight
+    // early while leaving this turn's flight pending forever.
     const settle = this.settleActiveTurn;
-    this.process = null;
     this.settleActiveTurn = null;
+    this.turnConsumer = null;
     try {
-      await process.shutdown();
-    } catch {
-      // A turn process that will not stop cannot block session cleanup.
+      await this.stopProcess();
     } finally {
       // A process killed past its final shutdown timeout never notifies its
       // exit listeners, so the turn is settled here rather than waiting on one.
       settle?.();
+    }
+  }
+
+  /** Stops the process without touching whatever turn is being set up. */
+  private async stopProcess(): Promise<void> {
+    const process = this.process;
+    if (!process) return;
+    this.process = null;
+    this.processConversationId = null;
+    this.processKey = null;
+    try {
+      await process.shutdown();
+    } catch {
+      // A process that will not stop cannot block session cleanup.
     }
   }
 
@@ -771,16 +904,25 @@ function buildAgyEnvironment(
 }
 
 /**
- * agy takes its prompt as a command-line argument and offers no stdin path, so
- * an oversized prompt fails at spawn with an errno the user cannot act on.
+ * Identifies a process by everything except the conversation it resumes, so a
+ * turn that only gained agy's conversation id reuses the running process.
  */
-function describeLaunchFailure(error: unknown): string {
-  if (error !== null && typeof error === 'object'
-    && (error as { code?: unknown }).code === 'E2BIG') {
-    return 'This conversation is too large to send to agy, which takes its '
-      + 'prompt as a command-line argument. Start a new conversation to continue.';
+function describeLaunchIdentity(launchSpec: AgyLaunchSpec): string {
+  const args: string[] = [];
+  for (let index = 0; index < launchSpec.args.length; index += 1) {
+    if (launchSpec.args[index] === '--conversation') {
+      index += 1;
+      continue;
+    }
+    args.push(launchSpec.args[index]);
   }
-  return `agy could not be started: ${toMessage(error)}`;
+
+  return JSON.stringify({
+    args,
+    command: launchSpec.command,
+    cwd: launchSpec.cwd,
+    env: launchSpec.env,
+  });
 }
 
 function formatUnexpectedExit(
