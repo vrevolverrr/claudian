@@ -59,7 +59,7 @@ Keep these layers independent:
    - Versioned view-state decoding is fail-closed: one malformed tab, duplicate ID, invalid active target, or invalid expanded-title target rejects the entire view snapshot. Permissive normalization is reserved for the legacy plugin-global migration source.
 3. **Runtime tab state**
    - `TabSession`, `ChatState`, controllers, renderers, and DOM exist only for the current view runtime. An unbound tab snapshots its own provider/model draft when created.
-   - Each tab owns exactly one `LinkedContentController`. An unbound auto draft may follow its active eligible Markdown Note; explicit selection is sticky, and a durable Conversation always projects a locked file, folder, missing, or unlinked identity. The Vault root is not a valid Linked content target.
+   - Each tab owns exactly one `LinkedContentController`. An unbound auto draft may follow its active eligible Markdown Note or PDF; explicit selection accepts any Vault file or folder and is sticky, and a durable Conversation always projects a locked file, folder, missing, or unlinked identity. The Vault root is not a valid Linked content target.
    - Hydration state is independent from both active-tab selection and provider execution state.
 4. **Provider execution state**
    - `ChatExecutionCoordinator` owns the live per-tab execution binding.

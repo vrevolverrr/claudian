@@ -722,4 +722,116 @@ describe('SelectionController', () => {
     });
   });
 
+  describe('PDF view', () => {
+    let pdfContainerEl: any;
+
+    beforeEach(() => {
+      pdfContainerEl = { contains: jest.fn().mockReturnValue(true) };
+      app.workspace.getActiveViewOfType.mockReturnValue(null);
+      app.workspace.getMostRecentLeaf = jest.fn(() => ({
+        view: {
+          getViewType: () => 'pdf',
+          file: { path: 'Courses/218 Article Eg.pdf' },
+          containerEl: pdfContainerEl,
+        },
+      }));
+    });
+
+    it('captures selected PDF text against the PDF path', () => {
+      const anchorNode = {};
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn().mockReturnValue(
+          createMockDOMSelection('special endurance', anchorNode),
+        ),
+      };
+
+      controller.start();
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toEqual({
+        notePath: 'Courses/218 Article Eg.pdf',
+        mode: 'selection',
+        selectedText: 'special endurance',
+        lineCount: 1,
+      });
+    });
+
+    it('does not re-capture a dismissed PDF selection while the sidebar has focus', () => {
+      const anchorNode = {};
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn().mockReturnValue(
+          createMockDOMSelection('special endurance', anchorNode),
+        ),
+      };
+      controller.start();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(true);
+
+      const [, items] = contextTray.setItems.mock.calls.at(-1)!;
+      const sidebarButton = {};
+      focusScopeEl.addContainedNode(sidebarButton);
+      (global as any).document.activeElement = sidebarButton;
+      (items as any)[0].onRemove();
+      expect(controller.hasSelection()).toBe(false);
+
+      jest.advanceTimersByTime(750);
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures again once focus returns to the PDF with a new selection', () => {
+      const anchorNode = {};
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn().mockReturnValue(
+          createMockDOMSelection('special endurance', anchorNode),
+        ),
+      };
+      controller.start();
+      jest.advanceTimersByTime(250);
+      const [, items] = contextTray.setItems.mock.calls.at(-1)!;
+      const sidebarButton = {};
+      focusScopeEl.addContainedNode(sidebarButton);
+      (global as any).document.activeElement = sidebarButton;
+      (items as any)[0].onRemove();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(false);
+
+      (global as any).document.activeElement = null;
+      (global as any).document.getSelection = jest.fn().mockReturnValue(
+        createMockDOMSelection('repeated-variable training', anchorNode),
+      );
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toEqual({
+        notePath: 'Courses/218 Article Eg.pdf',
+        mode: 'selection',
+        selectedText: 'repeated-variable training',
+        lineCount: 1,
+      });
+    });
+
+    it('clears the selection when the PDF selection is dropped', () => {
+      const anchorNode = {};
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn().mockReturnValue(
+          createMockDOMSelection('special endurance', anchorNode),
+        ),
+      };
+      controller.start();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(true);
+
+      (global as any).document.getSelection = jest.fn().mockReturnValue(
+        createMockDOMSelection('', null),
+      );
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+  });
+
+
 });

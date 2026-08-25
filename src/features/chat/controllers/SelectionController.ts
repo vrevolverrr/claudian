@@ -1,4 +1,4 @@
-import type { App, WorkspaceLeaf } from 'obsidian';
+import type { App, ItemView, WorkspaceLeaf } from 'obsidian';
 import { MarkdownView } from 'obsidian';
 
 import { hideSelectionHighlight, showSelectionHighlight } from '../../../shared/components/SelectionHighlight';
@@ -16,6 +16,11 @@ type CustomHighlightRegistry = {
 };
 type CustomHighlightConstructor = new (...ranges: Range[]) => unknown;
 type FocusScopeInput = HTMLElement | HTMLElement[];
+/** Minimum a view must expose for DOM-selection capture (reading mode, PDF). */
+type DocumentSelectionView = {
+  containerEl: HTMLElement;
+  file?: { path?: string } | null;
+};
 
 export class SelectionController {
   private app: App;
@@ -94,6 +99,11 @@ export class SelectionController {
   private poll(): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) {
+      const pdfView = this.getPdfView();
+      if (pdfView) {
+        this.pollReadingMode(pdfView);
+        return;
+      }
       // Keep the captured selection only while focus is transitioning into
       // the chat UI; any other leaf switch should drop stale prompt context.
       this.clearWhenMarkdownContextIsUnavailable();
@@ -150,7 +160,26 @@ export class SelectionController {
     }
   }
 
-  private pollReadingMode(view: MarkdownView): void {
+  /**
+   * Obsidian renders its PDF viewer as plain divs in the renderer document, so
+   * pdf.js text-layer selections are reachable through the same DOM-selection
+   * path reading mode uses. Page numbers are not exposed, so no line metadata.
+   */
+  private getPdfView(): DocumentSelectionView | null {
+    // Markdown stops capturing once the sidebar has focus, because its active-view
+    // lookup goes null there. getMostRecentLeaf ignores sidebars, so reproduce that
+    // deliberately; clearWhenMarkdownContextIsUnavailable still preserves a
+    // captured selection while the user types in the composer.
+    if (this.isFocusWithinChatSidebar()) return null;
+    const view = this.app.workspace.getMostRecentLeaf?.()?.view as
+      (ItemView & { file?: { path?: string } | null }) | undefined;
+    if (view?.getViewType?.() !== 'pdf') return null;
+    const containerEl = (view as unknown as { containerEl?: HTMLElement }).containerEl;
+    if (!containerEl || typeof view.file?.path !== 'string') return null;
+    return { containerEl, file: view.file };
+  }
+
+  private pollReadingMode(view: DocumentSelectionView): void {
     const containerEl = view.containerEl;
     if (!containerEl) {
       this.clearWhenMarkdownContextIsUnavailable();

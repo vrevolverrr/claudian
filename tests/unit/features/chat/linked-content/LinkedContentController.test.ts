@@ -105,6 +105,19 @@ describe('LinkedContentController', () => {
     );
   });
 
+  it('follows an active PDF in auto-draft', () => {
+    const pdf = createFile('Courses/218 Article Eg.pdf');
+    const harness = createHarness([pdf]);
+
+    harness.setActiveFile(pdf);
+    harness.controller.handleActiveFileChanged(pdf, true);
+
+    expect(harness.controller.getSnapshot()).toEqual({
+      mode: 'auto-draft',
+      path: 'Courses/218 Article Eg.pdf',
+    });
+  });
+
   it('defaults only eligible Markdown Notes and respects excluded tags', () => {
     const markdown = createFile('Notes/Private.md');
     const image = createFile('Images/Diagram.png');

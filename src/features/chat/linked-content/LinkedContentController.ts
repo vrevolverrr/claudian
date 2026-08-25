@@ -15,6 +15,12 @@ import {
 } from './LinkedContentPresentation';
 import { LinkedContentSelector } from './LinkedContentSelector';
 
+/**
+ * Extensions the auto draft may follow from the active file. Explicit picker
+ * selection accepts any Vault file; this allowlist only governs auto-follow.
+ */
+const AUTO_LINK_EXTENSIONS = new Set(['md', 'pdf']);
+
 export type LinkedContentMode = 'auto-draft' | 'explicit-draft' | 'submitting' | 'locked';
 
 export interface LinkedContentSnapshot {
@@ -313,7 +319,7 @@ export class LinkedContentController {
   }
 
   private eligibleActiveFilePath(file: TFile | null): string | null {
-    if (!file || file.extension.toLocaleLowerCase() !== 'md' || this.hasExcludedTag(file)) {
+    if (!file || !AUTO_LINK_EXTENSIONS.has(file.extension.toLocaleLowerCase()) || this.hasExcludedTag(file)) {
       return null;
     }
     return normalizeLinkedContentPath(file.path);
