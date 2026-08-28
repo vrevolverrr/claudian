@@ -59,7 +59,8 @@ function getReferenceConventions(): string {
   return `## Reference Conventions
 
 - When mentioning Vault files in responses, use Obsidian wikilinks so they are clickable: \`[[folder/note.md]]\` or \`[[note]]\`.
-- Use \`![[image.png]]\` to render Vault images directly in chat.`;
+- Use \`![[image.png]]\` to render Vault images directly in chat.
+- Use \`$inline$\` and \`$$display$$\` LaTeX for math; it is rendered in chat.`;
 }
 
 function getVaultMediaContext(mediaFolder: string): string {

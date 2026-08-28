@@ -43,6 +43,7 @@ export interface AgyNormalizerOptions {
 export class AgyEventNormalizer {
   private assistantAnnounced = false;
   private conversationId: string | null = null;
+  private lastToolErrorMessage: string | null = null;
   private latestStepUsage: AgyUsage | null = null;
   private readonly startedToolNames = new Map<number, string>();
 
@@ -123,9 +124,13 @@ export class AgyEventNormalizer {
 
     this.startedToolNames.delete(step.step_index);
     const isError = step.state === 'ERROR' || step.tool_info?.error !== undefined;
-    const content = isError
+    const errorMessage = isError
       ? step.tool_info?.error?.message ?? 'agy reported a tool error.'
-      : step.tool_info?.output;
+      : null;
+    const content = errorMessage ?? step.tool_info?.output;
+    if (errorMessage !== null) {
+      this.lastToolErrorMessage = errorMessage;
+    }
 
     return [{
       ...(content === undefined ? {} : { content }),
@@ -200,6 +205,18 @@ export class AgyEventNormalizer {
           { type: 'assistant_message_started' },
           { text: result.response, type: 'text_delta' },
         );
+      }
+      // A turn that said nothing after a tool error is a denial that agy
+      // reports as SUCCESS with an empty response. Surface the tool error
+      // instead of ending the turn silently.
+      if (!this.assistantAnnounced && this.lastToolErrorMessage !== null) {
+        events.push({
+          category: 'provider',
+          message: this.lastToolErrorMessage,
+          recoverable: true,
+          type: 'execution_error',
+        });
+        return events;
       }
       events.push({ reason: 'completed', type: 'turn_completed' });
       return events;

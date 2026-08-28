@@ -100,8 +100,13 @@ describe('AgyEventNormalizer', () => {
       expect(completed[0].content).toContain('User denied permission');
     });
 
-    it('still completes the turn, because agy reports the turn as successful', () => {
-      expect(ofType(events, 'turn_completed')).toHaveLength(1);
+    it('ends the turn as a provider error instead of a silent success', () => {
+      const errors = ofType(events, 'execution_error');
+
+      expect(ofType(events, 'turn_completed')).toHaveLength(0);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toContain('User denied permission');
+      expect(errors[0].recoverable).toBe(true);
     });
   });
 

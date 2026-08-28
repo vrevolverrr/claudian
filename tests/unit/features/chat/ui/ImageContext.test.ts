@@ -8,6 +8,13 @@ jest.mock('obsidian', () => ({
   Notice: jest.fn(),
 }));
 
+const mockGetPathForFile = jest.fn();
+jest.mock(
+  'electron',
+  () => ({ webUtils: { getPathForFile: (file: unknown) => mockGetPathForFile(file) } }),
+  { virtual: true },
+);
+
 // Mock document.createElementNS for SVG elements created in setupDragAndDrop
 const mockSvgElement = () => {
   const el = createMockEl('svg');
@@ -207,12 +214,13 @@ describe('ImageContextManager', () => {
 // We access privates through any cast, matching the project's pattern.
 describe('ImageContextManager - Private Helpers', () => {
   let manager: any;
+  let inputEl: any;
   let callbacks: ReturnType<typeof createMockCallbacks>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     const { container } = createContainerWithInputWrapper();
-    const inputEl = createMockTextArea();
+    inputEl = createMockTextArea();
     callbacks = createMockCallbacks();
     manager = new ImageContextManager(container, inputEl, callbacks);
   });
@@ -523,9 +531,9 @@ describe('ImageContextManager - Private Helpers', () => {
       addImageSpy.mockRestore();
     });
 
-    it('handleDrop should skip non-image files', async () => {
+    it('handleDrop should insert a non-image file path instead of attaching', async () => {
       const addImageSpy = jest.spyOn(manager as any, 'addImageFromFile').mockResolvedValue(true);
-      jest.spyOn(manager as any, 'isImageFile').mockReturnValue(false);
+      mockGetPathForFile.mockReturnValue('/Users/someone/Downloads/doc.pdf');
 
       const mockFile = { type: 'application/pdf', name: 'doc.pdf', size: 1024 };
       const event = {
@@ -537,7 +545,59 @@ describe('ImageContextManager - Private Helpers', () => {
       await manager['handleDrop'](event as any);
 
       expect(addImageSpy).not.toHaveBeenCalled();
+      expect(inputEl.value).toBe('/Users/someone/Downloads/doc.pdf ');
       addImageSpy.mockRestore();
+    });
+
+    it('handleDrop should insert the path at the caret with separating spaces', async () => {
+      mockGetPathForFile.mockReturnValue('/tmp/doc.pdf');
+      inputEl.value = 'summarize please';
+      inputEl.selectionStart = 9;
+      inputEl.selectionEnd = 9;
+
+      const mockFile = { type: 'application/pdf', name: 'doc.pdf', size: 1024 };
+      const event = {
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+        dataTransfer: { files: { length: 1, 0: mockFile } },
+      };
+
+      await manager['handleDrop'](event as any);
+
+      expect(inputEl.value).toBe('summarize /tmp/doc.pdf please');
+    });
+
+    it('handleDrop should fall back to File.path when webUtils yields nothing', async () => {
+      mockGetPathForFile.mockImplementation(() => {
+        throw new Error('getPathForFile is not a function');
+      });
+
+      const mockFile = { type: 'application/pdf', name: 'doc.pdf', size: 1024, path: '/legacy/doc.pdf' };
+      const event = {
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+        dataTransfer: { files: { length: 1, 0: mockFile } },
+      };
+
+      await manager['handleDrop'](event as any);
+
+      expect(inputEl.value).toBe('/legacy/doc.pdf ');
+    });
+
+    it('handleDrop should notify when no path is resolvable', async () => {
+      mockGetPathForFile.mockReturnValue('');
+
+      const mockFile = { type: 'application/pdf', name: 'doc.pdf', size: 1024 };
+      const event = {
+        preventDefault: jest.fn(),
+        stopPropagation: jest.fn(),
+        dataTransfer: { files: { length: 1, 0: mockFile } },
+      };
+
+      await manager['handleDrop'](event as any);
+
+      expect(inputEl.value).toBe('');
+      expect(Notice).toHaveBeenCalledWith(expect.stringContaining('doc.pdf'));
     });
 
     it('handleDrop should handle no files gracefully', async () => {

@@ -124,6 +124,9 @@ describe('systemPrompt', () => {
       );
       expect(prompt).toContain('use Obsidian wikilinks so they are clickable');
       expect(prompt).toContain('Use `![[image.png]]` to render Vault images directly in chat.');
+      expect(prompt).toContain(
+        'Use `$inline$` and `$$display$$` LaTeX for math; it is rendered in chat.',
+      );
       expect(prompt).not.toContain('**Structure**');
       expect(prompt).not.toContain('**Frontmatter**');
       expect(prompt).not.toContain('**Tags**');

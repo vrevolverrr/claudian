@@ -143,7 +143,7 @@ export class ImageContextManager {
     line.setAttribute('y1', '3');
     line.setAttribute('x2', '12');
     line.setAttribute('y2', '15');
-    dropContent.createSpan({ text: 'Drop image here' });
+    dropContent.createSpan({ text: 'Drop files here' });
 
     inputWrapper.addEventListener('dragenter', this.dragEnterHandler);
     inputWrapper.addEventListener('dragover', this.dragOverHandler);
@@ -202,8 +202,46 @@ export class ImageContextManager {
       const file = files[i];
       if (this.isImageFile(file)) {
         await this.addImageFromFile(file, 'drop');
+      } else {
+        const path = this.resolveDroppedFilePath(file);
+        if (path) {
+          this.insertTextAtCaret(path);
+        } else {
+          new Notice(`Could not resolve a path for ${file.name}.`);
+        }
       }
     }
+  }
+
+  private resolveDroppedFilePath(file: File): string | null {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Electron webUtils is exposed only at runtime in Obsidian's renderer.
+      const { webUtils } = require('electron') as {
+        webUtils?: { getPathForFile: (file: File) => string };
+      };
+      const path = webUtils?.getPathForFile(file);
+      if (path) return path;
+    } catch {
+      // Older Electron exposes the path on the File object instead.
+    }
+    return (file as File & { path?: string }).path || null;
+  }
+
+  private insertTextAtCaret(text: string) {
+    const el = this.inputEl;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const before = el.value.slice(0, start);
+    const after = el.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? ' ' : '';
+    const trail = after && /^\s/.test(after) ? '' : ' ';
+    const inserted = `${lead}${text}${trail}`;
+    el.value = `${before}${inserted}${after}`;
+    const caret = before.length + inserted.length;
+    el.selectionStart = caret;
+    el.selectionEnd = caret;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
   }
 
   private setupPasteHandler() {

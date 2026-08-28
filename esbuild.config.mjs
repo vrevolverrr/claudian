@@ -137,10 +137,14 @@ function createPatchRendererUnsafeUnref(outputPaths) {
   };
 }
 
-// Obsidian plugin folder path (set via OBSIDIAN_VAULT env var or .env.local)
+// Obsidian plugin folder path (set via OBSIDIAN_VAULT env var or .env.local).
+// The folder is named after the manifest id: a fork ships its own id, and a
+// hardcoded name would write to a directory Obsidian loads as a different
+// plugin, leaving the real install stale.
+const PLUGIN_ID = JSON.parse(readFileSync('manifest.json', 'utf8')).id;
 const OBSIDIAN_VAULT = process.env.OBSIDIAN_VAULT;
 const OBSIDIAN_PLUGIN_PATH = OBSIDIAN_VAULT && existsSync(OBSIDIAN_VAULT)
-  ? path.join(OBSIDIAN_VAULT, '.obsidian', 'plugins', 'claudian')
+  ? path.join(OBSIDIAN_VAULT, '.obsidian', 'plugins', PLUGIN_ID)
   : null;
 
 // Plugin to copy built files to Obsidian plugin folder
