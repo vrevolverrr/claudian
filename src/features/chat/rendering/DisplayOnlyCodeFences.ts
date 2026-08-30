@@ -26,9 +26,16 @@ export interface PreparedDisplayOnlyCodeFences {
   fences: DisplayOnlyCodeFence[];
 }
 
-/** Replaces fence languages so Obsidian cannot dispatch registered code-block processors. */
+/**
+ * Replaces fence languages so Obsidian cannot dispatch registered code-block processors.
+ *
+ * `allowedLanguages` exempts languages whose processor is a pure renderer, matched
+ * case-sensitively against the raw fence info token (Obsidian matches the resulting
+ * `code.language-*` class the same way).
+ */
 export function prepareDisplayOnlyCodeFences(
   markdown: string,
+  allowedLanguages: readonly string[] = [],
 ): PreparedDisplayOnlyCodeFences {
   const fences: DisplayOnlyCodeFence[] = [];
   const preparedMarkdown = transformMarkdownSegments(markdown, {
@@ -38,8 +45,12 @@ export function prepareDisplayOnlyCodeFences(
         return opener;
       }
 
-      const placeholderLanguage = `${PLACEHOLDER_LANGUAGE_PREFIX}${fences.length}`;
       const originalLanguage = languageMatch[2];
+      if (allowedLanguages.includes(originalLanguage)) {
+        return opener;
+      }
+
+      const placeholderLanguage = `${PLACEHOLDER_LANGUAGE_PREFIX}${fences.length}`;
       fences.push({ placeholderLanguage, originalLanguage });
 
       const transformedInfo = `${languageMatch[1]}${placeholderLanguage}${languageMatch[3]}`;
@@ -50,6 +61,12 @@ export function prepareDisplayOnlyCodeFences(
   });
 
   return { markdown: preparedMarkdown, fences };
+}
+
+/** Reports whether the markdown contains a top-level fence in the given language. */
+export function hasFenceLanguage(markdown: string, language: string): boolean {
+  return prepareDisplayOnlyCodeFences(markdown).fences
+    .some((fence) => fence.originalLanguage === language);
 }
 
 /** Restores display metadata after Markdown post-processors finish, then highlights the code. */

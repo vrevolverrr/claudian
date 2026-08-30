@@ -2,6 +2,7 @@ import { createMockEl } from '@test/helpers/MockElement';
 import { loadPrism } from 'obsidian';
 
 import {
+  hasFenceLanguage,
   prepareDisplayOnlyCodeFences,
   restoreDisplayOnlyCodeFences,
 } from '@/features/chat/rendering/DisplayOnlyCodeFences';
@@ -86,6 +87,79 @@ describe('DisplayOnlyCodeFences', () => {
       'TABLE file.name',
     ].join('\n'));
     expect(prepared.fences).toHaveLength(1);
+  });
+
+  it('leaves an allowlisted language untouched and out of the restore list', () => {
+    const markdown = [
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+    ].join('\n');
+
+    const prepared = prepareDisplayOnlyCodeFences(markdown, ['mermaid']);
+
+    expect(prepared.markdown).toBe(markdown);
+    expect(prepared.fences).toEqual([]);
+  });
+
+  it('still placeholders non-allowlisted fences alongside an allowlisted one', () => {
+    const markdown = [
+      '```mermaid',
+      'graph TD',
+      '```',
+      '```dataview',
+      'TABLE file.name',
+      '```',
+    ].join('\n');
+
+    const prepared = prepareDisplayOnlyCodeFences(markdown, ['mermaid']);
+
+    expect(prepared.markdown).toBe([
+      '```mermaid',
+      'graph TD',
+      '```',
+      '```claudian-display-only-fence-0',
+      'TABLE file.name',
+      '```',
+    ].join('\n'));
+    expect(prepared.fences).toEqual([
+      {
+        placeholderLanguage: 'claudian-display-only-fence-0',
+        originalLanguage: 'dataview',
+      },
+    ]);
+  });
+
+  it('placeholders mermaid when no allowlist is supplied', () => {
+    const markdown = ['```mermaid', 'graph TD', '```'].join('\n');
+
+    const prepared = prepareDisplayOnlyCodeFences(markdown);
+
+    expect(prepared.markdown).toBe([
+      '```claudian-display-only-fence-0',
+      'graph TD',
+      '```',
+    ].join('\n'));
+    expect(prepared.fences).toHaveLength(1);
+  });
+
+  it('matches the allowlist case-sensitively', () => {
+    const markdown = ['```Mermaid', 'graph TD', '```'].join('\n');
+
+    const prepared = prepareDisplayOnlyCodeFences(markdown, ['mermaid']);
+
+    expect(prepared.markdown).toBe([
+      '```claudian-display-only-fence-0',
+      'graph TD',
+      '```',
+    ].join('\n'));
+    expect(prepared.fences[0].originalLanguage).toBe('Mermaid');
+  });
+
+  it('detects a top-level fence language and ignores one nested in an outer fence', () => {
+    expect(hasFenceLanguage(['```mermaid', 'graph TD', '```'].join('\n'), 'mermaid')).toBe(true);
+    expect(hasFenceLanguage(['````markdown', '```mermaid', 'graph TD', '```', '````'].join('\n'), 'mermaid')).toBe(false);
   });
 
   it('restores original language classes and reapplies Prism highlighting', async () => {
