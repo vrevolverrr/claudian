@@ -47,6 +47,7 @@ import { hasStreamingMathDelimiters } from '../../../utils/markdownMath';
 import { getVaultPath, normalizePathForVault } from '../../../utils/path';
 import type { FeatureHost } from '../../FeatureHost';
 import { FLAVOR_TEXTS } from '../constants';
+import { hasFenceLanguage } from '../rendering/DisplayOnlyCodeFences';
 import type { MessageRenderer, RenderContentOptions } from '../rendering/MessageRenderer';
 import { resolveSubagentAdapter } from '../rendering/subagentAdapterResolution';
 import {
@@ -520,6 +521,17 @@ export class StreamController {
 
   private shouldExpandFileEditsByDefault(): boolean {
     return this.deps.plugin.settings.expandFileEditsByDefault === true;
+  }
+
+  /**
+   * Reports whether a completed text block needs one more render than streaming gave it:
+   * to un-defer math, or to let the mermaid fence through now that the content is whole.
+   * Deliberately ignores mermaid trust — an untrusted vault pays one redundant re-render
+   * that produces identical output, which is cheaper than reaching for `app` here.
+   */
+  private needsFinalRenderPass(content: string): boolean {
+    return (this.shouldDeferMathRendering() && hasStreamingMathDelimiters(content))
+      || hasFenceLanguage(content, 'mermaid');
   }
 
   private getStreamingRenderOptions(content: string): RenderContentOptions | undefined {
@@ -1079,12 +1091,14 @@ export class StreamController {
     const textEl = state.currentTextEl;
     const content = state.currentTextContent;
 
-    if (
-      textEl
-      && this.shouldDeferMathRendering()
-      && hasStreamingMathDelimiters(content)
-    ) {
-      this.textRenderCoordinator.request({ el: textEl, content });
+    if (textEl && this.needsFinalRenderPass(content)) {
+      // The coordinator dedupes by version, not content, so this request is what makes
+      // flush() re-render a block the last streaming frame already drew.
+      this.textRenderCoordinator.request({
+        el: textEl,
+        content,
+        options: { allowProcessorFences: true },
+      });
     }
     await this.textRenderCoordinator.flush();
 

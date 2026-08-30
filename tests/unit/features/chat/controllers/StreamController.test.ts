@@ -418,13 +418,52 @@ describe('StreamController - Text Content', () => {
       expect(deps.renderer.renderContent).toHaveBeenNthCalledWith(
         1,
         expect.anything(),
-        'Final $x^2$'
+        'Final $x^2$',
+        { allowProcessorFences: true }
       );
       expect(deps.renderer.renderContent).toHaveBeenCalledTimes(1);
       expect(deps.renderer.addTextCopyButton).toHaveBeenCalledWith(
         expect.anything(),
         'Final $x^2$'
       );
+    });
+
+    it('should suppress mermaid while streaming and allow it on the final text render', async () => {
+      const msg = createTestMessage();
+      const content = '```mermaid\ngraph TD\n  A --> B\n```';
+
+      await controller.appendText(content);
+      jest.advanceTimersByTime(16);
+      await Promise.resolve();
+      jest.advanceTimersByTime(150);
+      await Promise.resolve();
+      await controller.finalizeCurrentTextBlock(msg);
+
+      expect(deps.renderer.renderContent).toHaveBeenCalledTimes(2);
+      expect(deps.renderer.renderContent).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        content
+      );
+      expect(deps.renderer.renderContent).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        content,
+        { allowProcessorFences: true }
+      );
+    });
+
+    it('should not re-render a finalized text block that needs no final pass', async () => {
+      const msg = createTestMessage();
+
+      await controller.appendText('plain text');
+      jest.advanceTimersByTime(16);
+      await Promise.resolve();
+      jest.advanceTimersByTime(150);
+      await Promise.resolve();
+      await controller.finalizeCurrentTextBlock(msg);
+
+      expect(deps.renderer.renderContent).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1872,6 +1911,31 @@ describe('StreamController - Text Content', () => {
         contentEl,
         'Reasoning $x^2$'
       );
+    });
+
+    it('should never allow processor fences in thinking content', async () => {
+      const { createThinkingBlock } = jest.requireMock('@/features/chat/rendering/ThinkingBlockRenderer');
+      const msg = createTestMessage();
+      const contentEl = createMockEl();
+      createThinkingBlock.mockReturnValueOnce({
+        wrapperEl: createMockEl(),
+        contentEl,
+        labelEl: createMockEl(),
+        content: '',
+        startTime: Date.now(),
+        isExpanded: true,
+      });
+      const content = '```mermaid\ngraph TD\n  A --> B\n```';
+
+      await controller.handleStreamChunk({ type: 'thinking', content }, msg);
+      jest.advanceTimersByTime(16);
+      await Promise.resolve();
+      await controller.finalizeCurrentThinkingBlock(msg);
+
+      expect(deps.renderer.renderContent).toHaveBeenCalled();
+      for (const call of (deps.renderer.renderContent as jest.Mock).mock.calls) {
+        expect(call[2]?.allowProcessorFences).toBeUndefined();
+      }
     });
 
     it('should skip live renders while thinking is collapsed', async () => {
