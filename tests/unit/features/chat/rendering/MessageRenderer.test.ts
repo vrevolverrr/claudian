@@ -71,11 +71,12 @@ function createRenderer(
   messagesEl?: any,
   providerId: 'claude' | 'codex' | 'grok' = 'claude',
   settings: Record<string, unknown> = {},
+  mermaidTrusted = false,
 ) {
   const el = messagesEl ?? createMockEl();
   const comp = createMockComponent();
   const plugin = {
-    app: {},
+    app: { loadLocalStorage: jest.fn().mockReturnValue(mermaidTrusted) },
     settings: { mediaFolder: '', ...settings },
   };
   return {
@@ -88,6 +89,7 @@ function createRenderer(
       mockCapabilities(providerId),
     ),
     messagesEl: el,
+    plugin,
   };
 }
 
@@ -321,7 +323,7 @@ describe('MessageRenderer', () => {
 
     renderer.renderStoredMessage(msg);
 
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'user input only');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'user input only', expect.anything());
   });
 
   it('renders extracted user display content when stored message has hidden XML context', () => {
@@ -338,7 +340,7 @@ describe('MessageRenderer', () => {
 
     renderer.renderStoredMessage(msg);
 
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Explain this');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Explain this', expect.anything());
   });
 
   it('skips empty user message bubble (image-only)', () => {
@@ -569,7 +571,7 @@ describe('MessageRenderer', () => {
     renderer.renderStoredMessage(msg);
 
     expect(renderStoredThinkingBlock).toHaveBeenCalled();
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Text block');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Text block', expect.anything());
     // TodoWrite is not rendered inline - only in bottom panel
     expect(renderStoredWriteEdit).toHaveBeenCalled();
     expect(renderStoredToolCall).toHaveBeenCalled();
@@ -650,7 +652,7 @@ describe('MessageRenderer', () => {
 
     // Only the non-empty text block should trigger renderContent
     expect(renderContentSpy).toHaveBeenCalledTimes(1);
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Real content');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Real content', expect.anything());
   });
 
   it('does not render stored Codex write_stdin transport tools', () => {
@@ -848,7 +850,7 @@ describe('MessageRenderer', () => {
     renderer.renderStoredMessage(msg);
 
     // Should render content text
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Legacy response text');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Legacy response text', expect.anything());
     // Should add copy button for fallback text
     expect(addCopySpy).toHaveBeenCalledWith(expect.anything(), 'Legacy response text');
     // Should render tool call
@@ -877,7 +879,7 @@ describe('MessageRenderer', () => {
 
     renderer.renderStoredMessage(msg);
 
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Only text block persisted');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'Only text block persisted', expect.anything());
     expect(renderStoredToolCall).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: 'read-1', name: 'Read' }),
@@ -2139,6 +2141,84 @@ describe('MessageRenderer', () => {
       expect(highlightElement).toHaveBeenCalledWith(code);
     });
 
+    it('leaves mermaid fences intact when processor fences are allowed on a trusted vault', async () => {
+      const { MarkdownRenderer } = await import('obsidian');
+      const { renderer } = createRenderer(undefined, 'claude', {}, true);
+      const el = createMockEl();
+
+      await renderer.renderContent(
+        el,
+        '```mermaid\ngraph TD\n  A --> B\n```',
+        { allowProcessorFences: true },
+      );
+
+      expect(MarkdownRenderer.renderMarkdown).toHaveBeenCalledTimes(1);
+      expect((MarkdownRenderer.renderMarkdown as jest.Mock).mock.calls[0][0])
+        .toContain('```mermaid');
+    });
+
+    it('neutralizes mermaid fences when processor fences are not opted into', async () => {
+      const { MarkdownRenderer } = await import('obsidian');
+      const { renderer } = createRenderer(undefined, 'claude', {}, true);
+      const el = createMockEl();
+
+      await renderer.renderContent(el, '```mermaid\ngraph TD\n```');
+
+      expect(MarkdownRenderer.renderMarkdown).toHaveBeenCalledTimes(1);
+      const renderedMarkdown = (MarkdownRenderer.renderMarkdown as jest.Mock).mock.calls[0][0];
+      expect(renderedMarkdown).toContain('```claudian-display-only-fence-0');
+      expect(renderedMarkdown).not.toContain('```mermaid');
+    });
+
+    it('neutralizes mermaid fences on a vault without mermaid trust', async () => {
+      const { MarkdownRenderer } = await import('obsidian');
+      const { renderer } = createRenderer(undefined, 'claude', {}, false);
+      const el = createMockEl();
+
+      await renderer.renderContent(
+        el,
+        '```mermaid\ngraph TD\n```',
+        { allowProcessorFences: true },
+      );
+
+      expect(MarkdownRenderer.renderMarkdown).toHaveBeenCalledTimes(1);
+      const renderedMarkdown = (MarkdownRenderer.renderMarkdown as jest.Mock).mock.calls[0][0];
+      expect(renderedMarkdown).toContain('```claudian-display-only-fence-0');
+      expect(renderedMarkdown).not.toContain('```mermaid');
+    });
+
+    it('keeps dataview fences neutralized even when processor fences are allowed', async () => {
+      const { MarkdownRenderer } = await import('obsidian');
+      const { renderer } = createRenderer(undefined, 'claude', {}, true);
+      const el = createMockEl();
+
+      await renderer.renderContent(
+        el,
+        '```dataview\nTABLE file.name\n```',
+        { allowProcessorFences: true },
+      );
+
+      expect(MarkdownRenderer.renderMarkdown).toHaveBeenCalledTimes(1);
+      const renderedMarkdown = (MarkdownRenderer.renderMarkdown as jest.Mock).mock.calls[0][0];
+      expect(renderedMarkdown).toContain('```claudian-display-only-fence-0');
+      expect(renderedMarkdown).not.toContain('```dataview');
+    });
+
+    it('reads mermaid trust from the vault trust key only when opted in', async () => {
+      const trusted = createRenderer(undefined, 'claude', {}, true);
+      await trusted.renderer.renderContent(
+        createMockEl(),
+        '```mermaid\ngraph TD\n```',
+        { allowProcessorFences: true },
+      );
+      expect(trusted.plugin.app.loadLocalStorage)
+        .toHaveBeenCalledWith('mermaid-vault-trust');
+
+      const optedOut = createRenderer(undefined, 'claude', {}, true);
+      await optedOut.renderer.renderContent(createMockEl(), '```mermaid\ngraph TD\n```');
+      expect(optedOut.plugin.app.loadLocalStorage).not.toHaveBeenCalled();
+    });
+
     it('should add language label when code block has language class', async () => {
       const { MarkdownRenderer } = await import('obsidian');
       const { renderer } = createRenderer();
@@ -2197,7 +2277,7 @@ describe('MessageRenderer', () => {
 
     renderer.addMessage(msg);
 
-    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'user input only');
+    expect(renderContentSpy).toHaveBeenCalledWith(expect.anything(), 'user input only', expect.anything());
   });
 
   // ============================================

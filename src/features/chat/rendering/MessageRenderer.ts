@@ -53,7 +53,21 @@ import { renderStoredWriteEdit } from './WriteEditRenderer';
 
 export interface RenderContentOptions {
   deferMath?: boolean;
+  /**
+   * Opt in to processor-backed fences (mermaid). Fail-closed: omit it and every fence
+   * stays inert. Pass true only when the content is complete AND the container is
+   * visible — a hidden container makes Obsidian defer the diagram forever.
+   */
+  allowProcessorFences?: boolean;
 }
+
+/**
+ * Languages whose Obsidian post-processor is a pure renderer, safe to let through on
+ * completed content. Never widen this: processors that execute against the vault
+ * (dataview, dataviewjs, templater) must stay neutralized on model-authored text.
+ */
+const PROCESSOR_ALLOWED_FENCE_LANGUAGES = ['mermaid'] as const;
+const MERMAID_VAULT_TRUST_KEY = 'mermaid-vault-trust';
 
 export type RenderContentFn = (
   el: HTMLElement,
@@ -188,7 +202,7 @@ export class MessageRenderer {
       const textToShow = this.getUserMessageTextToShow(msg);
       if (textToShow) {
         const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
-        void this.renderContent(textEl, textToShow);
+        void this.renderContent(textEl, textToShow, { allowProcessorFences: true });
         this.addUserCopyButton(msgEl, textToShow);
         this.applyTocTitle(msgEl, textToShow);
       }
@@ -222,7 +236,7 @@ export class MessageRenderer {
     const textToShow = this.getUserMessageTextToShow(msg);
     if (textToShow) {
       const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
-      void this.renderContent(textEl, textToShow);
+      void this.renderContent(textEl, textToShow, { allowProcessorFences: true });
       this.applyTocTitle(msgEl, textToShow);
     } else {
       msgEl.removeAttribute('data-toc-title');
@@ -322,7 +336,7 @@ export class MessageRenderer {
       const textToShow = this.getUserMessageTextToShow(msg);
       if (textToShow) {
         const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
-        void this.renderContent(textEl, textToShow);
+        void this.renderContent(textEl, textToShow, { allowProcessorFences: true });
         this.addUserCopyButton(msgEl, textToShow);
         this.applyTocTitle(msgEl, textToShow);
       }
@@ -413,7 +427,7 @@ export class MessageRenderer {
             continue;
           }
           const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
-          void this.renderContent(textEl, normalized.content);
+          void this.renderContent(textEl, normalized.content, { allowProcessorFences: true });
           this.addTextCopyButton(textEl, normalized.content);
         } else if (block.type === 'citations') {
           this.renderCitationGroup(contentEl, block.citations);
@@ -455,7 +469,7 @@ export class MessageRenderer {
         hadLegacyInterruptIndicator ||= normalized.interrupted;
         if (normalized.content.trim()) {
           const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
-          void this.renderContent(textEl, normalized.content);
+          void this.renderContent(textEl, normalized.content, { allowProcessorFences: true });
           this.addTextCopyButton(textEl, normalized.content);
         }
       }
@@ -723,6 +737,20 @@ export class MessageRenderer {
   /**
    * Renders markdown content with code block enhancements.
    */
+  /**
+   * Obsidian gates its mermaid post-processor behind a per-vault trust flag. Without
+   * trust it replaces the block with a guard card whose Allow button grants trust
+   * vault-wide, so leaving mermaid un-neutralized would let model output summon that
+   * prompt. Stay neutralized until the user has granted trust from their own content.
+   */
+  private isMermaidTrusted(): boolean {
+    try {
+      return this.app.loadLocalStorage?.(MERMAID_VAULT_TRUST_KEY) === true;
+    } catch {
+      return false;
+    }
+  }
+
   async renderContent(
     el: HTMLElement,
     markdown: string,
@@ -739,7 +767,15 @@ export class MessageRenderer {
       // as plain text. Trusted plugin markup (image embeds) is injected only
       // after this step, otherwise it would be escaped too.
       const safeMarkdown = escapeRawHtmlTags(renderMarkdown);
-      const displayOnlyCodeFences = prepareDisplayOnlyCodeFences(safeMarkdown);
+      // Order matters: the opt-in short-circuits first so streaming frames never
+      // pay for the trust lookup.
+      const allowedFenceLanguages = options?.allowProcessorFences && this.isMermaidTrusted()
+        ? PROCESSOR_ALLOWED_FENCE_LANGUAGES
+        : [];
+      const displayOnlyCodeFences = prepareDisplayOnlyCodeFences(
+        safeMarkdown,
+        allowedFenceLanguages,
+      );
       const processedMarkdown = replaceImageEmbedsWithHtml(
         displayOnlyCodeFences.markdown,
         this.app,
@@ -754,7 +790,13 @@ export class MessageRenderer {
       );
       await restoreDisplayOnlyCodeFences(el, displayOnlyCodeFences.fences);
 
-      el.querySelectorAll('pre').forEach(enhanceRenderedCodeFence);
+      el.querySelectorAll('pre').forEach((pre) => {
+        // Obsidian replaces the <pre> with div.mermaid, but defers when the element is
+        // not shown. Wrapping a surviving mermaid <pre> would leave the diagram framed
+        // in code-block chrome once that deferred render lands.
+        if (pre.querySelector('code.language-mermaid')) return;
+        enhanceRenderedCodeFence(pre);
+      });
 
       // Process wikilinks only when the source can contain them; the DOM pass is expensive.
       if (processedMarkdown.includes('[[')) {

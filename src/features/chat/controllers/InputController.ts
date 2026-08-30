@@ -2074,7 +2074,7 @@ export class InputController {
       : input;
 
     const renderContent = (el: HTMLElement, markdown: string) =>
-      this.deps.renderer.renderContent(el, markdown);
+      this.deps.renderer.renderContent(el, markdown, { allowProcessorFences: true });
 
     const planPathPrefix = this.getActiveCapabilities().planPathPrefix;
 
