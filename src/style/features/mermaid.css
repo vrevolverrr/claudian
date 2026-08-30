@@ -1,0 +1,13 @@
+/* Mermaid diagrams rendered by Obsidian's own post-processor inside chat.
+   Obsidian initializes mermaid with useMaxWidth: false, so the SVG gets a fixed
+   pixel width measured once at render time and never reflows with the sidebar. */
+
+.claudian-container .mermaid {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.claudian-container .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
