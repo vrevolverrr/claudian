@@ -22,6 +22,19 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
     const hostnameKey = getHostnameKey();
     const workspace = getAgyWorkspaceServices();
 
+    const warningEl = container.createDiv({ cls: 'claudian-settings-warning-callout' });
+    warningEl.createDiv({
+      cls: 'claudian-settings-warning-callout-title',
+      text: 'Read before enabling',
+    });
+    warningEl.createDiv({
+      text: 'agy runs one non-interactive turn per message, so it cannot pause to ask '
+        + 'for approval. In Plan and No-edits modes it denies file writes and shell '
+        + 'commands and reports them as failed; only YOLO lets them run, without a '
+        + 'confirmation step. Google\'s terms also do not permit third-party tools '
+        + 'to access Antigravity, and using this may put your account at risk.',
+    });
+
     renderProviderEnablementSetting({
       container,
       description: 'Run Google\'s Antigravity CLI (agy) inside your vault.',
@@ -35,19 +48,6 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
           );
         });
       },
-    });
-
-    const warningEl = container.createDiv({ cls: 'claudian-settings-warning-callout' });
-    warningEl.createDiv({
-      cls: 'claudian-settings-warning-callout-title',
-      text: 'Read before enabling',
-    });
-    warningEl.createDiv({
-      text: 'agy runs one non-interactive turn per message, so it cannot pause to ask '
-        + 'for approval. In Plan and No-edits modes it denies file writes and shell '
-        + 'commands and reports them as failed; only YOLO lets them run, without a '
-        + 'confirmation step. Google\'s terms also do not permit third-party tools '
-        + 'to access Antigravity, and using this may put your account at risk.',
     });
 
     renderHostnameCliPathSetting({

@@ -172,8 +172,12 @@
 }
 
 .claudian-settings-warning-callout {
+  /* Aligns the text with setting rows, which Obsidian insets by this variable. */
   margin: 0 0 var(--size-4-3);
-  padding: var(--size-4-2) var(--size-4-3);
+  padding-block: var(--size-4-3);
+  padding-inline:
+    calc(var(--setting-items-padding-x, var(--size-4-5)) - 3px)
+    var(--setting-items-padding-x, var(--size-4-5));
   border: 1px solid var(--background-modifier-border);
   border-left: 3px solid var(--text-warning);
   border-radius: var(--radius-m);
