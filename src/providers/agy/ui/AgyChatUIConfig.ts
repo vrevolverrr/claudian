@@ -43,8 +43,8 @@ function getSelectedFamily(
   model: string,
   settings: Record<string, unknown>,
 ): AgyModelFamily | null {
-  const baseId = decodeAgyModelId(model);
-  return baseId ? findAgyModelFamily(getFamilies(settings), baseId) : null;
+  const rawId = decodeAgyModelId(model);
+  return rawId ? findAgyModelFamily(getFamilies(settings), rawId) : null;
 }
 
 export const agyChatUIConfig: ProviderChatUIConfig = {
@@ -70,11 +70,11 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   },
 
   getDefaultModel(settings): string | null {
-    const selected = getAgyProviderSettings(settings).selectedModel;
-    if (getSelectedFamily(selected, settings)) return selected;
-
-    const first = getFamilies(settings)[0];
-    return first ? encodeAgyModelId(first.baseId) : null;
+    // Answering with the family id rather than the stored selection is what
+    // migrates a selection pinned to one version onto the collapsed entry.
+    const family = getSelectedFamily(getAgyProviderSettings(settings).selectedModel, settings)
+      ?? getFamilies(settings)[0];
+    return family ? encodeAgyModelId(family.familyId) : null;
   },
 
   getDefaultReasoningValue(model, settings): string {
@@ -84,7 +84,7 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   getModelOptions(settings): ProviderUIOption[] {
     return getFamilies(settings).map((family) => ({
       label: family.label,
-      value: encodeAgyModelId(family.baseId),
+      value: encodeAgyModelId(family.familyId),
     }));
   },
 
@@ -114,8 +114,9 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   normalizeModelVariant(model, settings): string {
     if (!isAgyModelSelectionId(model)) return model;
 
-    return getSelectedFamily(model, settings)
-      ? model
+    const family = getSelectedFamily(model, settings);
+    return family
+      ? encodeAgyModelId(family.familyId)
       : agyChatUIConfig.getDefaultModel?.(settings) ?? model;
   },
 

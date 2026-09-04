@@ -141,9 +141,51 @@ export interface AgyModelVariant {
 }
 
 export interface AgyModelFamily {
-  readonly baseId: string;
+  /** Version-free selection id, e.g. `gemini-flash`. */
+  readonly familyId: string;
   readonly label: string;
+  /** Newest catalog id for the family, with no effort suffix. */
+  readonly rawId: string;
   readonly variants: readonly AgyModelVariant[];
+}
+
+/**
+ * agy serves several versions of one model at once — 3.8, 3.7 and 3.6 Flash —
+ * and only the newest is worth offering. A selection therefore names the
+ * family and the newest catalog entry answers to it, so a stored selection
+ * never goes stale when agy ships a new version. agy itself has no such alias
+ * and rejects an id it does not serve, so the resolution happens here.
+ *
+ * A segment is a version only when it is nothing but digits and dots: that
+ * lifts `3.8` out of the middle of `gemini-3.8-flash` and `4-6` off the end of
+ * `claude-sonnet-4-6`, while leaving the size in `gpt-oss-120b` alone.
+ */
+const VERSION_SEGMENT = /^\d+(?:\.\d+)*$/;
+
+export function splitAgyModelVersion(baseId: string): {
+  familyId: string;
+  version: number[];
+} {
+  const version: number[] = [];
+  const rest: string[] = [];
+
+  for (const segment of baseId.split('-')) {
+    if (VERSION_SEGMENT.test(segment)) {
+      version.push(...segment.split('.').map(Number));
+    } else {
+      rest.push(segment);
+    }
+  }
+
+  return { familyId: rest.join('-') || baseId, version };
+}
+
+function compareAgyVersions(left: readonly number[], right: readonly number[]): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
 }
 
 export function splitAgyModelId(rawModelId: string): {
@@ -182,12 +224,26 @@ function stripEffortLabel(label: string, effort: AgyEffortLevel): string {
 export function buildAgyModelFamilies(
   models: readonly AgyModel[],
 ): AgyModelFamily[] {
-  const families = new Map<string, { label: string; variants: AgyModelVariant[] }>();
+  const families = new Map<string, {
+    label: string;
+    rawId: string;
+    variants: AgyModelVariant[];
+    version: number[];
+  }>();
 
   for (const model of models) {
     const { baseId, effort } = splitAgyModelId(model.id);
-    const family = families.get(baseId)
-      ?? { label: '', variants: [] };
+    const { familyId, version } = splitAgyModelVersion(baseId);
+
+    const known = families.get(familyId);
+    const comparison = known ? compareAgyVersions(version, known.version) : 1;
+    if (comparison < 0) continue;
+
+    // A newer version replaces what an older one contributed rather than
+    // merging with it: the efforts a family offers can change between versions.
+    const family = comparison === 0 && known
+      ? known
+      : { label: '', rawId: baseId, variants: [], version };
 
     if (effort === null) {
       family.label = model.label;
@@ -200,12 +256,13 @@ export function buildAgyModelFamilies(
       });
     }
 
-    families.set(baseId, family);
+    families.set(familyId, family);
   }
 
-  return [...families].map(([baseId, family]) => ({
-    baseId,
-    label: family.label || baseId,
+  return [...families].map(([familyId, family]) => ({
+    familyId,
+    label: family.label || familyId,
+    rawId: family.rawId,
     variants: family.variants.sort(
       (left, right) => AGY_EFFORT_LEVELS.indexOf(left.effort)
         - AGY_EFFORT_LEVELS.indexOf(right.effort),
@@ -213,11 +270,16 @@ export function buildAgyModelFamilies(
   }));
 }
 
+/**
+ * Accepts a family id or any concrete agy id, so a selection stored before the
+ * families collapsed — `gemini-3.6-flash-low` — still finds its family.
+ */
 export function findAgyModelFamily(
   families: readonly AgyModelFamily[],
-  baseId: string,
+  selectedRawId: string,
 ): AgyModelFamily | null {
-  return families.find((family) => family.baseId === baseId) ?? null;
+  const { familyId } = splitAgyModelVersion(splitAgyModelId(selectedRawId).baseId);
+  return families.find((family) => family.familyId === familyId) ?? null;
 }
 
 export function resolveAgyDefaultEffort(

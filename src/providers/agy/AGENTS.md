@@ -30,6 +30,7 @@
 - agy's question tool resolves as skipped without reaching the user. `AGY_NON_INTERACTIVE_APPENDIX` says so up front; without it agy spends a turn reporting the skip before restating the options as text.
 - Prompts travel on stdin, so there is no argument-size ceiling: a 405KB prompt was accepted whole. Print mode still has no image input; attachments are written into the vault and referenced by path.
 - Never pass `--effort`. agy encodes reasoning effort in the model id and rejects the flag for a model that already names its effort. `resolveAgyLaunchModel` recombines the Claudian model selection and effort setting into one id, and appends an effort only when the catalog publishes that variant.
+- A Claudian agy model id names a family, not an agy model: `agy:gemini-flash`, never `agy:gemini-3.8-flash`. agy serves several versions of one model at once (3.8, 3.7 and 3.6 Flash on 1.1.19) and has no alias of its own — `--model gemini-flash` fails with `model gemini-flash is not recognized`, before any network work — so `buildAgyModelFamilies` keeps only the newest version of each family and `resolveAgyLaunchModel` expands the family back to that concrete id. The point is that a stored selection survives an agy release; do not reintroduce version-bearing selection ids. `findAgyModelFamily` accepts either form, which is what migrates selections stored before the collapse.
 
 ## System Prompt Delivery
 

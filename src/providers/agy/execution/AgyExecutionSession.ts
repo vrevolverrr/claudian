@@ -37,7 +37,6 @@ import {
 import {
   type AgyModel,
   buildAgyModelFamilies,
-  composeAgyModelId,
   decodeAgyModelId,
   findAgyModelFamily,
   getEffectiveAgyModels,
@@ -728,11 +727,12 @@ export function resolveAgyPermissionFlags(
 /**
  * Builds the id agy expects from a Claudian selection and the chosen effort.
  *
- * The selection names a model and effort is chosen separately, but agy wants
- * one id. Only an effort the catalog actually publishes for that model is
- * appended: the shared effort setting outlives a switch to a model that has no
- * variants, and agy rejects an id it does not serve. Splitting first also
- * repairs a selection persisted before model and effort were separated.
+ * The selection names a model family and effort is chosen separately, but agy
+ * wants one concrete id, and only ever an id it publishes. So the family
+ * resolves to its newest catalog version, and only an effort that version
+ * actually offers is used: the shared effort setting outlives a switch to a
+ * model that has no variants. A selection stored against an older version, or
+ * before model and effort were separated, resolves through the same lookup.
  */
 export function resolveAgyLaunchModel(
   selectedRawId: string | null,
@@ -742,18 +742,19 @@ export function resolveAgyLaunchModel(
   if (!selectedRawId) return null;
 
   const { baseId, effort } = splitAgyModelId(selectedRawId);
-  const family = findAgyModelFamily(buildAgyModelFamilies(catalog), baseId);
-  if (!family || family.variants.length === 0) return baseId;
+  const family = findAgyModelFamily(buildAgyModelFamilies(catalog), selectedRawId);
+  // A catalog that has not been read yet, or has dropped the model: pass the
+  // selection through rather than silently substituting another model.
+  if (!family) return baseId;
+  if (family.variants.length === 0) return family.rawId;
 
-  const offered = new Set<string>(family.variants.map((variant) => variant.effort));
-  const requested = [reasoning, effort].find(
-    (candidate) => candidate && offered.has(candidate),
+  const offered = new Map<string, string>(
+    family.variants.map((variant) => [variant.effort, variant.rawId]),
   );
+  const requested = [reasoning, effort, resolveAgyDefaultEffort(family)]
+    .find((candidate) => candidate && offered.has(candidate));
 
-  return composeAgyModelId(
-    baseId,
-    requested ?? resolveAgyDefaultEffort(family),
-  );
+  return (requested && offered.get(requested)) ?? family.variants[0].rawId;
 }
 
 export function getAgyInputText(request: ProviderExecutionRequest): string {

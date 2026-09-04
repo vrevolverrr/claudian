@@ -257,10 +257,11 @@ describe('AgySettingsTab', () => {
 
     const dropdown = findSetting('Default model').dropdownComponents[0];
     expect(dropdown.options).toEqual([
-      ['agy:gemini-3.7-flash', 'Gemini 3.7 Flash'],
-      ['agy:claude-opus-4-6-thinking', 'Claude Opus 4.6 (Thinking)'],
+      ['agy:gemini-flash', 'Gemini 3.7 Flash'],
+      ['agy:claude-opus-thinking', 'Claude Opus 4.6 (Thinking)'],
     ]);
-    expect(dropdown.setValue).toHaveBeenLastCalledWith('agy:claude-opus-4-6-thinking');
+    // The stored selection names a version; the dropdown lists the family.
+    expect(dropdown.setValue).toHaveBeenLastCalledWith('agy:claude-opus-thinking');
   });
 
   it('persists a newly chosen default model', async () => {
@@ -268,9 +269,9 @@ describe('AgySettingsTab', () => {
     const context = render(settings);
 
     await findSetting('Default model').dropdownComponents[0]
-      .onChangeCallback?.('agy:gemini-3.7-flash');
+      .onChangeCallback?.('agy:gemini-flash');
 
-    expect(getAgyProviderSettings(settings).selectedModel).toBe('agy:gemini-3.7-flash');
+    expect(getAgyProviderSettings(settings).selectedModel).toBe('agy:gemini-flash');
     expect(context.plugin.saveSettings).toHaveBeenCalled();
     expect(context.notifyProviderModelOptionsChanged).toHaveBeenCalledWith('agy');
   });
@@ -299,7 +300,7 @@ describe('AgySettingsTab', () => {
     await modelSetting.buttonComponents[0].onClickCallback?.();
 
     expect(dropdown.selectEl.empty).toHaveBeenCalled();
-    expect(dropdown.options).toEqual([['agy:gemini-4-pro', 'Gemini 4 Pro']]);
+    expect(dropdown.options).toEqual([['agy:gemini-pro', 'Gemini 4 Pro']]);
     expect(context.notifyProviderModelOptionsChanged).toHaveBeenCalledWith('agy');
   });
 
