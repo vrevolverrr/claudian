@@ -110,6 +110,7 @@ import { setLocale, t } from './i18n/i18n';
 import type { Locale } from './i18n/types';
 import { deleteLegacyMcpConfig } from './providers/claude/storage/LegacyMcpConfigCleanup';
 import { buildCursorContext } from './utils/editor';
+import { getInstallationKey } from './utils/env';
 import { revealWorkspaceLeaf } from './utils/obsidianCompat';
 import { getVaultPath } from './utils/path';
 
@@ -716,14 +717,17 @@ export default class ClaudianPlugin extends Plugin {
     if (vaultRoot === null) return null;
     const collab = await import('./app/collab');
     if (!this.isCollabEnabled() || generation !== this.collabLifecycleGeneration) return null;
+    const installationKey = getInstallationKey();
     const foundation = new collab.ClaudianCollabService({
       getConfiguredGitPath: () => this.settings.collabGitPath ?? '',
       getProjectsFolder: () => this.settings.collabProjectsFolder,
+      installationKey,
       obsidianConfigDirectory: this.app.vault.configDir,
       vaultRoot,
     });
     const projectSetup = new collab.CollabProjectSetupService(foundation, {
       getProjectsFolder: () => this.settings.collabProjectsFolder,
+      installationKey,
       vaultRoot,
     });
     const { feature } = collab.createCollabFeatureSubcomposition({
@@ -1507,17 +1511,21 @@ export default class ClaudianPlugin extends Plugin {
       const addedConversations: Conversation[] = [];
       const invalidatedConversations: Conversation[] = [];
       let didChangeConversationList = false;
-      const publishBatch = (metadata: SessionMetadata[]): void => {
-        if (this.isUnloading || metadata.length === 0) return;
+      const publishBatch = (records: SessionMetadataReadResult[]): void => {
+        if (this.isUnloading || records.length === 0) return;
 
-        const recoverySources = metadata.map((item) => (
-          this.createConversationMetadataShell(item)
+        const recoverySources = records.map(({ metadata }) => (
+          this.createConversationMetadataShell(metadata)
         ));
-        const shells = metadata
-          .map((item) => this.createConversationMetadataShell(item))
-          .filter((conversation) => (
+        const publishable = records
+          .map(record => ({
+            conversation: this.createConversationMetadataShell(record.metadata),
+            source: record.source,
+          }))
+          .filter(({ conversation }) => (
             this.conversationRepository.isSelectedModelPublicationSafe(conversation)
           ));
+        const shells = publishable.map(({ conversation }) => conversation);
         const publishedIds = new Set(shells.map(({ id }) => id));
         const invalidatedShells = ProviderSettingsCoordinator
           .invalidateConversationSessions(
@@ -1527,7 +1535,12 @@ export default class ClaudianPlugin extends Plugin {
         const invalidatedIds = new Set(
           invalidatedShells.map(({ id }) => id),
         );
-        const added = this.conversationRepository.mergeMetadataConversations(shells);
+        const added = publishable.flatMap(({ conversation, source }) => (
+          this.conversationRepository.mergeMetadataConversations(
+            [conversation],
+            source === 'legacy' ? 'unscoped' : source,
+          )
+        ));
         this.conversationRepository.registerHistoricalModelRecoverySources(
           recoverySources.filter(({ id }) => publishedIds.has(id)),
         );
@@ -1539,22 +1552,24 @@ export default class ClaudianPlugin extends Plugin {
         );
         didChangeConversationList = true;
       };
-      const scan = await this.storage.sessions.scanMetadata({
+      const scan = await this.storage.sessions.scan({
         onBatch: publishBatch,
       });
       if (this.isUnloading) {
         return;
       }
 
-      StartupProfiler.recordCount('session-metadata-count', scan.metadata.length);
+      StartupProfiler.recordCount('session-metadata-count', scan.records.length);
       StartupProfiler.recordCount(
         'invalid-session-metadata-count',
         scan.invalidMetadataCount,
       );
-      const scannedShells = scan.metadata
-        .map(({ id }) => this.conversationRepository.getCachedConversation(id))
+      const scannedShells = scan.records
+        .map(({ metadata }) => this.conversationRepository.getCachedConversation(metadata.id))
         .filter((shell): shell is Conversation => shell !== null);
-      const records = await this.resolveMetadataSources(scan.metadata);
+      const records = await this.resolveMetadataSources(
+        scan.records.map(({ metadata }) => metadata),
+      );
       const resolvedIds = new Set(records.map(({ metadata }) => metadata.id));
       const unresolvedShells = scannedShells.filter(
         ({ id }) => !resolvedIds.has(id),
@@ -1565,7 +1580,7 @@ export default class ClaudianPlugin extends Plugin {
       if (unresolvedShells.length > 0) {
         didChangeConversationList = true;
       }
-      publishBatch(records.map(({ metadata }) => metadata));
+      publishBatch(records);
       const entries = records.map(({ metadata, needsMigration, source }) => ({
         conversation: this.createConversationMetadataShell(metadata),
         needsMigration,
@@ -2188,6 +2203,12 @@ export default class ClaudianPlugin extends Plugin {
 
   async switchConversation(id: string): Promise<Conversation | null> {
     return this.conversationRepository.switchTo(id);
+  }
+
+  async assignConversationToCurrentDevice(id: string): Promise<boolean> {
+    const assigned = await this.conversationRepository.assignToCurrentDevice(id);
+    if (assigned) this.notifyConversationViewsChanged();
+    return assigned;
   }
 
   async deleteConversation(id: string): Promise<void> {

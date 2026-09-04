@@ -1,11 +1,12 @@
-import type { App } from 'obsidian';
-import { Notice, TFile, TFolder } from 'obsidian';
+import type { App, WorkspaceLeaf } from 'obsidian';
+import { FileView, Notice, TFile, TFolder } from 'obsidian';
 
 import {
   assertLinkedContentPath,
   normalizeLinkedContentPath,
 } from '@/core/path/LinkedContentPath';
 import type { ComposerContextTray } from '@/features/chat/ui/ComposerContextTray';
+import { revealWorkspaceLeaf } from '@/utils/obsidianCompat';
 
 import { LinkedContentChip } from './LinkedContentChip';
 import { LinkedContentPickerSource } from './LinkedContentPickerSource';
@@ -27,6 +28,8 @@ export interface LinkedContentSnapshot {
   readonly mode: LinkedContentMode;
   readonly path: string | null;
 }
+
+type ExcludedTagState = 'excluded' | 'not-excluded' | 'unknown';
 
 export interface LinkedContentSubmissionToken {
   readonly path?: string;
@@ -136,10 +139,14 @@ export class LinkedContentController {
 
   handleActiveFileChanged(file: TFile | null, isActiveOwner: boolean): void {
     if (this.destroyed || !isActiveOwner || this.mode !== 'auto-draft') return;
-    const nextPath = this.eligibleActiveFilePath(file);
-    if (nextPath === this.path) return;
-    this.path = nextPath;
-    this.publish();
+    this.reconcileAutoDraftPath(file);
+  }
+
+  handleActiveFileMetadataChanged(file: TFile | null): void {
+    if (this.destroyed || this.mode !== 'auto-draft') return;
+    const activeFile = this.app.workspace.getActiveFile();
+    if (file !== null && activeFile?.path !== file.path) return;
+    this.reconcileAutoDraftPath(activeFile);
   }
 
   lock(path: string | undefined): void {
@@ -272,7 +279,7 @@ export class LinkedContentController {
     }
     if (content.target instanceof TFile) {
       try {
-        await this.app.workspace.getLeaf().openFile(content.target);
+        await this.revealFile(content.target);
       } catch (error) {
         new Notice(
           `Failed to open Linked content: ${error instanceof Error ? error.message : String(error)}`,
@@ -318,18 +325,29 @@ export class LinkedContentController {
     return true;
   }
 
+  private reconcileAutoDraftPath(file: TFile | null): void {
+    const nextPath = this.eligibleActiveFilePath(file);
+    if (nextPath === this.path) return;
+    this.path = nextPath;
+    this.publish();
+  }
+
   private eligibleActiveFilePath(file: TFile | null): string | null {
-    if (!file || !AUTO_LINK_EXTENSIONS.has(file.extension.toLocaleLowerCase()) || this.hasExcludedTag(file)) {
+    if (
+      !file
+      || !AUTO_LINK_EXTENSIONS.has(file.extension.toLocaleLowerCase())
+      || this.getExcludedTagState(file) !== 'not-excluded'
+    ) {
       return null;
     }
     return normalizeLinkedContentPath(file.path);
   }
 
-  private hasExcludedTag(file: TFile): boolean {
+  private getExcludedTagState(file: TFile): ExcludedTagState {
     const excludedTags = this.options.getExcludedTags();
-    if (excludedTags.length === 0) return false;
+    if (excludedTags.length === 0) return 'not-excluded';
     const cache = this.app.metadataCache.getFileCache(file);
-    if (!cache) return false;
+    if (!cache) return 'unknown';
     const fileTags: string[] = [];
     const frontmatterTags: unknown = cache.frontmatter?.tags;
     if (Array.isArray(frontmatterTags)) {
@@ -341,7 +359,9 @@ export class LinkedContentController {
     }
     if (cache.tags) fileTags.push(...cache.tags.map(tag => tag.tag));
     const normalizedExcluded = new Set(excludedTags.map(tag => tag.replace(/^#/, '')));
-    return fileTags.some(tag => normalizedExcluded.has(tag.replace(/^#/, '')));
+    return fileTags.some(tag => normalizedExcluded.has(tag.replace(/^#/, '')))
+      ? 'excluded'
+      : 'not-excluded';
   }
 
   private publish(): void {
@@ -371,6 +391,28 @@ export class LinkedContentController {
 
   private derivePresentation(path: string | null): LinkedContentPresentation | null {
     return path ? deriveLinkedContentPresentation(this.app, path) : null;
+  }
+
+  private async revealFile(file: TFile): Promise<void> {
+    const workspace = this.app.workspace;
+    let existingLeaf: WorkspaceLeaf | null = null;
+    workspace.iterateRootLeaves(leaf => {
+      if (
+        existingLeaf === null
+        && (
+          leaf.view instanceof FileView
+            ? leaf.view.file?.path === file.path
+            : leaf.isDeferred && leaf.getViewState().state?.file === file.path
+        )
+      ) {
+        existingLeaf = leaf;
+      }
+    });
+    if (existingLeaf) {
+      await revealWorkspaceLeaf(workspace, existingLeaf);
+      return;
+    }
+    await workspace.getLeaf('tab').openFile(file);
   }
 
   private async revealFolder(folder: TFolder): Promise<void> {

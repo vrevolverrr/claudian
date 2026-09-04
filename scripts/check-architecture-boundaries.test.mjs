@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 
 import {
-  cloudAuthorityBindingAllowanceBytes,
   evaluationIndicatorMs,
   evaluationReviewThresholdMs,
   inspectArtifactSize,
@@ -13,9 +14,13 @@ import {
   inspectPluginArtifactReferences,
   mainBudgetBytes,
   preCollabReferenceMainBytes,
-  privateCloudBootstrapAllowanceBytes,
-  standaloneProtocolPackagingAllowanceBytes,
+  preStep11BundleHealthBaselineBytes,
 } from './check-startup-performance.mjs';
+import {
+  bundleCriticalRuntimeDependencies,
+  inspectRuntimeDependencyParity,
+  parseBunLock,
+} from './runtimeDependencyParity.mjs';
 
 function listTypeScriptFiles(root) {
   const files = [];
@@ -27,16 +32,55 @@ function listTypeScriptFiles(root) {
   return files;
 }
 
+function normalizeRepositoryPath(filePath) {
+  return filePath.replaceAll('\\', '/');
+}
+
 function findMatches(roots, pattern) {
   const matches = [];
   for (const root of roots) {
     for (const file of listTypeScriptFiles(root)) {
       if (pattern.test(fs.readFileSync(file, 'utf8'))) {
-        matches.push(path.relative(process.cwd(), file));
+        matches.push(normalizeRepositoryPath(path.relative(process.cwd(), file)));
       }
     }
   }
   return matches;
+}
+
+const step12ProjectMembershipOperations = Object.freeze([
+  'createCloudProject',
+  'createProjectInvitation',
+  'listProjectInvitations',
+  'revokeProjectInvitation',
+  'joinCloudProject',
+  'listProjectMembers',
+  'reissueTransferredMembershipClaim',
+  'revokeTransferredMembershipClaim',
+  'createManagerResponsibilityOffer',
+  'listCurrentManagerResponsibilityOffers',
+  'getManagerResponsibilityOffer',
+  'acknowledgeManagerResponsibility',
+  'declineManagerResponsibility',
+  'cancelManagerResponsibilityOffer',
+  'promoteManager',
+  'demoteManager',
+  'removeMember',
+  'leaveProject',
+]);
+
+const step12CloudCapabilityTokens = Object.freeze([
+  'cloud-imported-membership-claims',
+  'cloud-project-create',
+  'cloud-project-invitations',
+  'cloud-project-join',
+  'cloud-project-leave',
+  'cloud-project-manager-responsibility',
+  'cloud-project-membership',
+]);
+
+function symbolPattern(symbols) {
+  return new RegExp(`\\b(?:${symbols.join('|')})\\b`, 'u');
 }
 
 function inspectForbiddenSymbolInventory(entries, pattern, allowedOccurrences) {
@@ -59,7 +103,7 @@ function inspectForbiddenSymbolInventory(entries, pattern, allowedOccurrences) {
 function findForbiddenSymbolInventoryViolations(pattern, allowedOccurrences) {
   return inspectForbiddenSymbolInventory(
     listTypeScriptFiles(sourceRoot).map(file => ({
-      file: path.relative(process.cwd(), file),
+      file: normalizeRepositoryPath(path.relative(process.cwd(), file)),
       source: fs.readFileSync(file, 'utf8'),
     })),
     pattern,
@@ -238,6 +282,11 @@ const allowedProviderAppImports = new Set([
   ),
 ]);
 
+test('repository paths use POSIX separators for stable cross-platform comparison', () => {
+  assert.equal(normalizeRepositoryPath('src\\main.ts'), 'src/main.ts');
+  assert.equal(normalizeRepositoryPath('src/main.ts'), 'src/main.ts');
+});
+
 test('concrete provider pattern covers every registered provider directory', () => {
   assert.notEqual(concreteProviderNames.length, 0);
   for (const providerName of concreteProviderNames) {
@@ -295,6 +344,59 @@ test('app avoids features and provider implementations outside default assembly'
 test('features are independent from the composition root and app adapters', () => {
   const pattern = /from\s+['"][^'"]*(?:main['"]|app\/)/;
   assert.deepEqual(findMatches([path.join(sourceRoot, 'features')], pattern), []);
+});
+
+test('Collab Host installation authority stays outside membership and presentation', () => {
+  const collabAppRoot = path.join(appRoot, 'collab');
+  const repositorySource = fs.readFileSync(
+    path.join(collabAppRoot, 'CollabLocalProjectRepository.ts'),
+    'utf8',
+  );
+  const membershipStart = repositorySource.indexOf('interface CollabLocalMembershipRecordBase');
+  const membershipEnd = repositorySource.indexOf('export interface CollabLocalProjectPaths');
+  assert.notEqual(membershipStart, -1);
+  assert.notEqual(membershipEnd, -1);
+  const membershipSource = repositorySource.slice(membershipStart, membershipEnd);
+
+  assert.doesNotMatch(membershipSource, /ownerInstallationKey|installationKey|deviceId|deviceRole/);
+  assert.equal(
+    fs.existsSync(path.join(collabAppRoot, 'host-installation', 'HostInstallationBindingService.ts')),
+    true,
+  );
+  assert.deepEqual(findMatches(
+    [path.join(featuresRoot, 'collab')],
+    /HostInstallationBindingService|CollabLocalProjectRepository|getInstallationKey/,
+  ), []);
+  assert.deepEqual(findMatches(
+    [collabAppRoot],
+    /isRecoveryOwner\?|bindEligibleLegacyRecovery\?|prepareLegacyRuntime\?|commitHostedRoute\?/,
+  ), []);
+});
+
+test('Collab LAN data lanes retain one adapter and no Host-only authority bypass', () => {
+  const collabAppRoot = path.join(appRoot, 'collab');
+  const dataPlaneRoots = [
+    path.join(collabAppRoot, 'accept'),
+    path.join(collabAppRoot, 'conflicts'),
+    path.join(collabAppRoot, 'membership'),
+    path.join(collabAppRoot, 'publish'),
+    path.join(collabAppRoot, 'reconnect'),
+    path.join(collabAppRoot, 'remote-authority'),
+    path.join(collabAppRoot, 'review'),
+  ];
+
+  assert.deepEqual(findForbiddenSymbolInventoryViolations(
+    /new LanAuthorityAdapter\b/,
+    new Map([['src/app/collab/publish/CollabPublicationService.ts', 1]]),
+  ), []);
+  assert.deepEqual(findMatches(
+    dataPlaneRoots,
+    /allowHostRemoteRepair|collabStoppedHostRemoteUrl|\.openAuthority\(|\.createAuthority\(|\.inspectAuthority\(/,
+  ), []);
+  assert.deepEqual(findMatches(
+    [path.join(collabAppRoot, 'publish'), path.join(collabAppRoot, 'remote-authority')],
+    /hostOwnership\.ownsAuthority/,
+  ), []);
 });
 
 test('Collab modal and shared code do not depend on detail or sidebar surfaces', () => {
@@ -474,7 +576,9 @@ test('tab runtime construction stays private to the factory boundary', () => {
     new RegExp(`\\b${assemblySymbol}\\b`),
   ).sort();
 
-  assert.deepEqual(assemblyReferences, [path.relative(process.cwd(), factorySource)]);
+  assert.deepEqual(assemblyReferences, [
+    normalizeRepositoryPath(path.relative(process.cwd(), factorySource)),
+  ]);
   assert.equal(fs.existsSync(tabSource), false);
 
   const factory = fs.readFileSync(factorySource, 'utf8');
@@ -549,12 +653,12 @@ test('only TabRuntimeFactory can register runtime resource ownership', () => {
   ).sort();
 
   assert.deepEqual(registrationReferences, [
-    path.relative(process.cwd(), factorySource),
-    path.relative(process.cwd(), lifecycleSource),
+    normalizeRepositoryPath(path.relative(process.cwd(), factorySource)),
+    normalizeRepositoryPath(path.relative(process.cwd(), lifecycleSource)),
   ].sort());
 });
 
-test('Claudian consumes the standalone Collab protocol only from the exact registry package', () => {
+test('Claudian consumes the standalone Collab protocol only from the exact registry package', async () => {
   const root = process.cwd();
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const lockfile = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
@@ -565,17 +669,34 @@ test('Claudian consumes the standalone Collab protocol only from the exact regis
     'utf8',
   ));
 
-  assert.equal(manifest.dependencies?.[protocolPackageName], '1.0.0');
+  const protocol = await import(protocolPackageName);
+
+  assert.equal(manifest.dependencies?.[protocolPackageName], '3.3.2');
   assert.equal(manifest.dependencies?.['@lezer/markdown'], '1.7.2');
   assert.equal(protocolManifest.dependencies?.['@lezer/markdown'], '1.7.2');
   assert.equal(manifest.dependencies?.['@claudian/collab-protocol'], undefined);
   assert.equal(manifest.workspaces, undefined);
-  assert.equal(lockfile.packages?.['']?.dependencies?.[protocolPackageName], '1.0.0');
-  assert.equal(lockfile.packages?.[protocolInstallPath]?.version, '1.0.0');
+  assert.equal(lockfile.packages?.['']?.dependencies?.[protocolPackageName], '3.3.2');
+  assert.equal(lockfile.packages?.[protocolInstallPath]?.version, '3.3.2');
+  assert.equal(
+    lockfile.packages?.[protocolInstallPath]?.integrity,
+    'sha512-oOSfYrCZNSjVbDK9tE2d8wlhvIf9nUi5mCHf/lLQwQ2jeZ4sW7dLgygE+NEhZFqfICXwF3V++UTsAfcle5AAdg==',
+  );
   assert.equal(lockfile.packages?.['node_modules/@lezer/markdown']?.version, '1.7.2');
   assert.match(
     lockfile.packages?.[protocolInstallPath]?.resolved ?? '',
-    /^https:\/\/registry\.npmjs\.org\/@claudian-collab\/protocol\/-\/protocol-1\.0\.0\.tgz$/u,
+    /^https:\/\/registry\.npmjs\.org\/@claudian-collab\/protocol\/-\/protocol-3\.3\.2\.tgz$/u,
+  );
+  assert.equal(protocol.COLLAB_PROTOCOL_VERSION, 6);
+  assert.equal(protocol.COLLAB_CLOUD_BINDING_VERSION, 2);
+  assert.equal(protocol.COLLAB_PROJECT_BACKUP_COORDINATION_FORMAT_VERSION, 3);
+  assert.deepEqual(
+    protocol.COLLAB_PROJECT_MEMBERSHIP_OPERATIONS,
+    step12ProjectMembershipOperations,
+  );
+  assert.deepEqual(
+    Object.keys(protocol.COLLAB_PROJECT_MEMBERSHIP_OPERATION_CODECS),
+    protocol.COLLAB_PROJECT_MEMBERSHIP_OPERATIONS,
   );
 
   for (const retiredPath of [
@@ -612,12 +733,49 @@ test('standalone Collab protocol registry and contract constants are not redefin
   assert.deepEqual(findMatches([sourceRoot], pattern), []);
 });
 
+test('the protocol pin does not expose Step 12 Cloud management behavior', () => {
+  const cloudAuthorityAdapterSource = fs.readFileSync(path.join(
+    appRoot,
+    'collab',
+    'remote-authority',
+    'CloudAuthorityAdapter.ts',
+  ), 'utf8');
+  const packageManagementSurface = [
+    'COLLAB_PROJECT_MEMBERSHIP_LIMITS',
+    'COLLAB_PROJECT_MEMBERSHIP_OPERATIONS',
+    'COLLAB_PROJECT_MEMBERSHIP_OPERATION_CODECS',
+    'decodeCollabProjectMembershipOperationRequest',
+    'decodeCollabProjectMembershipOperationResponse',
+  ];
+  const cloudAdapterSurface = symbolPattern([
+    ...step12CloudCapabilityTokens,
+    ...step12ProjectMembershipOperations,
+    ...packageManagementSurface,
+  ]);
+  const cloudPresentationSurface = symbolPattern([
+    ...step12CloudCapabilityTokens,
+    'createCloudProject',
+    'createProjectInvitation',
+    'joinCloudProject',
+    'listCurrentManagerResponsibilityOffers',
+    'listProjectInvitations',
+    'listProjectMembers',
+    'reissueTransferredMembershipClaim',
+    'revokeProjectInvitation',
+    'revokeTransferredMembershipClaim',
+    ...packageManagementSurface,
+  ]);
+
+  assert.doesNotMatch(cloudAuthorityAdapterSource, cloudAdapterSurface);
+  assert.deepEqual(findMatches([featuresRoot], cloudPresentationSurface), []);
+});
+
 test('active Collab consumers use protocol-owned semantic identity predicates', () => {
   const entries = [
     ...listTypeScriptFiles(path.join(appRoot, 'collab')),
     ...listTypeScriptFiles(path.join(featuresRoot, 'collab')),
   ].map(file => ({
-    file: path.relative(process.cwd(), file),
+    file: normalizeRepositoryPath(path.relative(process.cwd(), file)),
     source: fs.readFileSync(file, 'utf8'),
   }));
 
@@ -709,7 +867,7 @@ test('production consumes protocol-owned canonical Collab Git refs', () => {
   ), []);
   assert.deepEqual(findForbiddenSymbolInventoryViolations(
     /refs\/heads\/members\//,
-    new Map([['src/app/collab/authority/AuthoritySchema.ts', 1]]),
+    new Map(),
   ), []);
   assert.deepEqual(findForbiddenSymbolInventoryViolations(
     /refs\/remotes\/origin\/main/,
@@ -732,6 +890,10 @@ test('Collab consumer CI does not retain protocol producer gates', () => {
   assert.doesNotMatch(workflow, /protocol-contract:|verify:protocol|check:protocol-compatibility/);
   assert.doesNotMatch(workflow, /packages\/collab-protocol/);
   assert.match(crossPlatformJob, /npm run build/);
+  assert.match(
+    crossPlatformJob,
+    /name: Run Windows architecture boundaries\s+if: runner\.os == 'Windows'\s+run: npm run test:architecture/,
+  );
   assert.match(crossPlatformJob, /npm run test:cross-platform-collab/);
 });
 
@@ -823,20 +985,29 @@ test('TypeScript resolves the Collab protocol through the installed registry pac
     parsed.options,
     ts.sys,
   ).resolvedModule;
+  const expectedFileName = path.join(
+    process.cwd(),
+    'node_modules',
+    '@claudian-collab',
+    'protocol',
+    'dist',
+    'index.d.ts',
+  );
 
   assert.equal(
-    resolution?.resolvedFileName,
-    path.join(process.cwd(), 'node_modules', '@claudian-collab', 'protocol', 'dist', 'index.d.ts'),
+    resolution?.resolvedFileName
+      ? normalizeRepositoryPath(resolution.resolvedFileName)
+      : undefined,
+    normalizeRepositoryPath(expectedFileName),
   );
 });
 
-test('performance policy enforces the main bundle budget and reports the pre-Collab delta', () => {
-  assert.equal(cloudAuthorityBindingAllowanceBytes, 50_000);
-  assert.equal(privateCloudBootstrapAllowanceBytes, 100_000);
-  assert.equal(standaloneProtocolPackagingAllowanceBytes, 20_000);
-  assert.equal(mainBudgetBytes, 5_170_000);
+test('performance policy enforces the main bundle budget and reports health deltas', () => {
+  assert.equal(preStep11BundleHealthBaselineBytes, 4_896_000);
+  assert.equal(mainBudgetBytes, 5_000_000);
   assert.deepEqual(inspectArtifactSize(mainBudgetBytes), {
     budgetExceeded: false,
+    healthBaselineDeltaBytes: mainBudgetBytes - preStep11BundleHealthBaselineBytes,
     referenceDeltaBytes: mainBudgetBytes - preCollabReferenceMainBytes,
   });
   assert.equal(inspectArtifactSize(mainBudgetBytes + 1).budgetExceeded, true);
@@ -846,6 +1017,140 @@ test('performance policy enforces the main bundle budget and reports the pre-Col
     inspectEvaluationDuration(evaluationReviewThresholdMs + 1),
     'review-required',
   );
+});
+
+test('bundle-critical runtime dependencies require exact manifest and lock agreement', () => {
+  assert.deepEqual(bundleCriticalRuntimeDependencies, [
+    '@anthropic-ai/claude-agent-sdk',
+    'smol-toml',
+  ]);
+  const packageJson = {
+    dependencies: {
+      '@anthropic-ai/claude-agent-sdk': '0.3.226',
+      'smol-toml': '1.7.1',
+    },
+  };
+  const packageLock = {
+    packages: {
+      '': { dependencies: { ...packageJson.dependencies } },
+      'node_modules/@anthropic-ai/claude-agent-sdk': { version: '0.3.226' },
+      'node_modules/smol-toml': { version: '1.7.1' },
+    },
+  };
+  const bunLock = {
+    workspaces: {
+      '': { dependencies: { ...packageJson.dependencies } },
+    },
+    packages: {
+      '@anthropic-ai/claude-agent-sdk': ['@anthropic-ai/claude-agent-sdk@0.3.226'],
+      'smol-toml': ['smol-toml@1.7.1'],
+    },
+  };
+
+  assert.deepEqual(inspectRuntimeDependencyParity({ bunLock, packageJson, packageLock }), []);
+
+  const rangedManifest = structuredClone(packageJson);
+  rangedManifest.dependencies['@anthropic-ai/claude-agent-sdk'] = '^0.3.220';
+  assert.deepEqual(
+    inspectRuntimeDependencyParity({ bunLock, packageJson: rangedManifest, packageLock }),
+    [{
+      actual: '^0.3.220',
+      dependency: '@anthropic-ai/claude-agent-sdk',
+      expected: 'an exact version',
+      source: 'package.json',
+    }],
+  );
+
+  const staleNpmLock = structuredClone(packageLock);
+  staleNpmLock.packages['node_modules/smol-toml'].version = '1.6.1';
+  assert.deepEqual(
+    inspectRuntimeDependencyParity({ bunLock, packageJson, packageLock: staleNpmLock }),
+    [{
+      actual: '1.6.1',
+      dependency: 'smol-toml',
+      expected: '1.7.1',
+      source: 'package-lock.json resolution',
+    }],
+  );
+
+  const staleBunLock = structuredClone(bunLock);
+  staleBunLock.packages['@anthropic-ai/claude-agent-sdk'][0] = '@anthropic-ai/claude-agent-sdk@0.3.220';
+  assert.deepEqual(
+    inspectRuntimeDependencyParity({ bunLock: staleBunLock, packageJson, packageLock }),
+    [{
+      actual: '0.3.220',
+      dependency: '@anthropic-ai/claude-agent-sdk',
+      expected: '0.3.226',
+      source: 'bun.lock resolution',
+    }],
+  );
+});
+
+test('Bun lock parsing accepts the repository JSONC shape without weakening JSON validation', () => {
+  assert.deepEqual(parseBunLock(`{
+    "literal": "preserve ,} and escaped \\\"text\\\"",
+    "workspaces": { "": { "dependencies": { "smol-toml": "1.7.1", }, }, },
+    "packages": { "smol-toml": ["smol-toml@1.7.1",], },
+  }`), {
+    literal: 'preserve ,} and escaped "text"',
+    workspaces: { '': { dependencies: { 'smol-toml': '1.7.1' } } },
+    packages: { 'smol-toml': ['smol-toml@1.7.1'] },
+  });
+  assert.throws(
+    () => parseBunLock('{ "packages": /* unsupported */ {} }'),
+    /bun\.lock is not valid JSONC/,
+  );
+});
+
+test('production artifact entry rejects dependency drift before emitting main.js', () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claudian-build-parity-'));
+  try {
+    fs.writeFileSync(path.join(fixtureRoot, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@anthropic-ai/claude-agent-sdk': '0.3.226',
+        'smol-toml': '1.7.1',
+      },
+    }));
+    fs.writeFileSync(path.join(fixtureRoot, 'package-lock.json'), JSON.stringify({
+      packages: {
+        '': {
+          dependencies: {
+            '@anthropic-ai/claude-agent-sdk': '0.3.226',
+            'smol-toml': '1.7.1',
+          },
+        },
+        'node_modules/@anthropic-ai/claude-agent-sdk': { version: '0.3.226' },
+        'node_modules/smol-toml': { version: '1.6.1' },
+      },
+    }));
+    fs.writeFileSync(path.join(fixtureRoot, 'bun.lock'), `{
+      "workspaces": { "": { "dependencies": {
+        "@anthropic-ai/claude-agent-sdk": "0.3.226",
+        "smol-toml": "1.7.1",
+      }, }, },
+      "packages": {
+        "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.226"],
+        "smol-toml": ["smol-toml@1.7.1"],
+      },
+    }`);
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(process.cwd(), 'esbuild.config.mjs'), 'production'],
+      {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: { ...process.env, OBSIDIAN_VAULT: '' },
+      },
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Bundle-critical runtime dependency parity failed/);
+    assert.match(result.stderr, /package-lock\.json resolution: smol-toml/);
+    assert.equal(fs.existsSync(path.join(fixtureRoot, 'main.js')), false);
+  } finally {
+    fs.rmSync(fixtureRoot, { force: true, recursive: true });
+  }
 });
 
 test('production bundle policy rejects plugin artifact filename references', () => {

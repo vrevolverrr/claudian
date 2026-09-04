@@ -1,6 +1,12 @@
+import { createServer } from 'node:http';
+import { Readable } from 'node:stream';
+
 import {
+  COLLAB_CHECKPOINT_ARTIFACT_LIMITS,
   COLLAB_CLOUD_PROJECT_SNAPSHOT_CODEC,
   COLLAB_LIMITS,
+  type CollabAuthorityTransferStatus,
+  type CollabCloudCapability,
   collabCloudCapabilityDocument,
   collabCloudSuccessEnvelope,
 } from '@claudian-collab/protocol';
@@ -9,10 +15,12 @@ import type { CollabLocalCloudMembershipRecord } from '@/app/collab/CollabLocalP
 import { COLLAB_LOCAL_PROJECT_SCHEMA_VERSION } from '@/app/collab/CollabSchemaVersions';
 import {
   CloudAuthorityAdapter,
-  type CloudAuthorityHttpRequest,
   CloudProjectEventClient,
   type CloudProjectEventSocket,
 } from '@/app/collab/remote-authority/CloudAuthorityAdapter';
+import type {
+  CloudAuthorityHttpRequest,
+} from '@/app/collab/remote-authority/NodeCloudAuthorityHttpTransport';
 
 const PROJECT_ID = 'project-cloud';
 const ACTOR_ID = 'member-alice';
@@ -20,6 +28,15 @@ const CREATED_AT = '2026-08-22T00:00:00.000Z';
 const MAIN_OID = 'a'.repeat(40);
 const HEAD_OID = 'b'.repeat(40);
 const MERGED_OID = 'c'.repeat(40);
+const STEP_12_CLOUD_MANAGEMENT_CAPABILITIES = Object.freeze([
+  'cloud-imported-membership-claims',
+  'cloud-project-create',
+  'cloud-project-invitations',
+  'cloud-project-join',
+  'cloud-project-leave',
+  'cloud-project-manager-responsibility',
+  'cloud-project-membership',
+] satisfies readonly CollabCloudCapability[]);
 
 function changeRequest(overrides: Readonly<Record<string, unknown>> = {}) {
   return {
@@ -67,12 +84,12 @@ function ticketDetail(overrides: Readonly<Record<string, unknown>> = {}) {
 function membership(): CollabLocalCloudMembershipRecord {
   return {
     authority: {
-      bindingVersion: 1,
+      bindingVersion: 2,
       developmentActorId: ACTOR_ID,
-      gitRemoteUrl: `https://cloud.example.test/v1/projects/${PROJECT_ID}/repository.git`,
+      gitRemoteUrl: `https://cloud.example.test/v2/projects/${PROJECT_ID}/repository.git`,
       kind: 'cloud',
       serverUrl: 'https://cloud.example.test',
-      wireVersion: 4,
+      wireVersion: 6,
     },
     createdAt: '2026-08-22T00:00:00.000Z',
     lastEventSequence: 3,
@@ -94,6 +111,11 @@ function membership(): CollabLocalCloudMembershipRecord {
 }
 
 const limits = {
+  maxCheckpointCoordinationBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxCoordinationBytes,
+  maxCheckpointManifestUtf8Bytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxManifestBytes,
+  maxCheckpointRepositoryBundleBytes:
+    COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxRepositoryBundleBytes,
+  maxCheckpointStagingBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxStagingBytes,
   maxDevelopmentBootstrapGitBundleBytes: 1_024,
   maxDevelopmentBootstrapManifestUtf8Bytes: 1_024,
   maxDevelopmentBootstrapReportUtf8Bytes: 1_024,
@@ -138,6 +160,221 @@ function cloudSnapshot() {
 }
 
 describe('CloudAuthorityAdapter', () => {
+  it('does not expose unimplemented Step 12 management capabilities', async () => {
+    const request = jest.fn(async () => ({
+      body: collabCloudCapabilityDocument(
+        STEP_12_CLOUD_MANAGEMENT_CAPABILITIES,
+        limits,
+      ),
+      contentType: 'application/json',
+      status: 200,
+    }));
+    const adapter = new CloudAuthorityAdapter({ request });
+    const [session, lifecycle] = await Promise.all([
+      adapter.create(membership()),
+      adapter.createLifecycle({
+        developmentActorId: ACTOR_ID,
+        projectId: PROJECT_ID,
+        serverUrl: 'https://cloud.example.test',
+      }),
+    ]);
+
+    for (const capability of STEP_12_CLOUD_MANAGEMENT_CAPABILITIES) {
+      expect(session.supports(capability)).toBe(false);
+      expect(lifecycle.supports(capability)).toBe(false);
+    }
+    expect(session.membership).toBeUndefined();
+  });
+
+  it('binds a lifecycle-only snapshot to the canonical Member ref', async () => {
+    const request = jest.fn(async (input: CloudAuthorityHttpRequest) => ({
+      body: input.method === 'GET'
+        ? collabCloudCapabilityDocument(['project-snapshot'], limits)
+        : collabCloudSuccessEnvelope('response-lifecycle-snapshot', cloudSnapshot()),
+      contentType: 'application/json',
+      status: 200,
+    }));
+    const lifecycle = await new CloudAuthorityAdapter({ request }).createLifecycle({
+      developmentActorId: ACTOR_ID,
+      projectId: PROJECT_ID,
+      serverUrl: 'https://cloud.example.test',
+    });
+
+    await expect(lifecycle.readSnapshot(PROJECT_ID)).resolves.toMatchObject({
+      currentMember: {
+        id: ACTOR_ID,
+        personalRef: 'refs/heads/members/member-alice',
+      },
+      project: { id: PROJECT_ID },
+    });
+  });
+
+  it('binds negotiated lifecycle control and artifact routes without a local registry', async () => {
+    const transferStatus = {
+      batchRevision: null,
+      batchSha256: null,
+      checkpointSha256: null,
+      createdAt: CREATED_AT,
+      direction: 'cloud-to-lan',
+      expiresAt: '2026-09-21T00:00:00.000Z',
+      phase: 'collecting-readiness',
+      projectId: PROJECT_ID,
+      relinquishmentProof: null,
+      sourceAuthority: { generation: 1, kind: 'cloud' },
+      state: 'active',
+      targetAuthority: { generation: 2, kind: 'lan' },
+      targetUrl: 'https://192.168.1.10:43123',
+      transferId: 'transfer-cloud-to-lan',
+      updatedAt: CREATED_AT,
+    } satisfies CollabAuthorityTransferStatus;
+    const jsonRequests: CloudAuthorityHttpRequest[] = [];
+    const uploaded: Buffer[] = [];
+    const adapter = new CloudAuthorityAdapter({
+      artifacts: {
+        download: input => Promise.resolve({
+          body: Readable.from(['checkpoint']),
+          byteCount: 10,
+          status: 200,
+        }),
+        upload: async input => {
+          for await (const chunk of input.body) uploaded.push(Buffer.from(chunk));
+          return { body: undefined, contentType: null, status: 204 };
+        },
+      },
+      request: async input => {
+        jsonRequests.push(input);
+        if (input.method === 'GET') {
+          return {
+            body: collabCloudCapabilityDocument([
+              'authority-transfer',
+              'project-retirement',
+            ], limits),
+            contentType: 'application/json',
+            status: 200,
+          };
+        }
+        return {
+          body: collabCloudSuccessEnvelope('request-lifecycle', transferStatus),
+          contentType: 'application/json',
+          status: 200,
+        };
+      },
+    });
+    const session = await adapter.create(membership());
+    expect(session.lifecycle).toBeDefined();
+
+    await expect(session.lifecycle!.authorityTransfer(
+      'getProjectAuthorityTransfer',
+      { projectId: PROJECT_ID, transferId: transferStatus.transferId },
+    )).resolves.toEqual(transferStatus);
+    await session.lifecycle!.uploadAuthorityTransferArtifact({
+      artifact: 'checkpoint.json',
+      body: Readable.from(['checkpoint']),
+      byteCount: 10,
+      projectId: PROJECT_ID,
+      transferId: transferStatus.transferId,
+    });
+    const download = await session.lifecycle!.downloadAuthorityTransferArtifact({
+      artifact: 'checkpoint.json',
+      projectId: PROJECT_ID,
+      transferId: transferStatus.transferId,
+    });
+    const downloaded: Buffer[] = [];
+    for await (const chunk of download.body) downloaded.push(Buffer.from(chunk));
+
+    expect(jsonRequests[1]?.url).toBe(
+      `https://cloud.example.test/v2/projects/${PROJECT_ID}`
+        + '/operations/getProjectAuthorityTransfer',
+    );
+    expect(Buffer.concat(uploaded).toString('utf8')).toBe('checkpoint');
+    expect(Buffer.concat(downloaded).toString('utf8')).toBe('checkpoint');
+  });
+
+  it('keeps lifecycle calls capability-gated and rejects legacy binding documents', async () => {
+    const request = jest.fn(async () => ({
+      body: collabCloudCapabilityDocument([], limits),
+      contentType: 'application/json',
+      status: 200,
+    }));
+    const session = await new CloudAuthorityAdapter({ request }).create(membership());
+    await expect(session.lifecycle!.authorityTransfer(
+      'getProjectAuthorityTransfer',
+      { projectId: PROJECT_ID, transferId: 'transfer-unavailable' },
+    )).rejects.toMatchObject({
+      code: 'operation-failed',
+      safeContext: { reason: 'cloud-authority-capability-unavailable' },
+    });
+
+    request.mockResolvedValueOnce({
+      body: {
+        ...collabCloudCapabilityDocument([], limits),
+        bindingVersions: [1],
+        protocolVersions: [4],
+      },
+      contentType: 'application/json',
+      status: 200,
+    });
+    await expect(new CloudAuthorityAdapter({ request }).create(membership()))
+      .rejects.toMatchObject({ code: 'protocol-version-unsupported' });
+  });
+
+  it('uses the desktop transport for default capability and snapshot reads', async () => {
+    const requests: Array<{ readonly actor: string | undefined; readonly url: string }> = [];
+    const server = createServer((request, response) => {
+      requests.push({
+        actor: typeof request.headers['x-claudian-development-actor'] === 'string'
+          ? request.headers['x-claudian-development-actor']
+          : undefined,
+        url: request.url ?? '',
+      });
+      response.setHeader('content-type', 'application/json; charset=utf-8');
+      if (request.method === 'GET') {
+        response.end(JSON.stringify(collabCloudCapabilityDocument([
+          'project-snapshot',
+        ], limits)));
+        return;
+      }
+      response.end(JSON.stringify(collabCloudSuccessEnvelope(
+        'request-snapshot',
+        cloudSnapshot(),
+      )));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('server address missing');
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new Error('renderer fetch is disabled'),
+    );
+    const localMembership = {
+      ...membership(),
+      authority: {
+        ...membership().authority,
+        serverUrl: `http://127.0.0.1:${address.port}`,
+      },
+    } satisfies CollabLocalCloudMembershipRecord;
+
+    try {
+      const session = await new CloudAuthorityAdapter().create(localMembership);
+      await expect(session.control.readSnapshot(PROJECT_ID)).resolves.toMatchObject({
+        currentMember: { id: ACTOR_ID },
+        project: { authorityKind: 'cloud', id: PROJECT_ID },
+      });
+      expect(requests).toEqual([
+        { actor: ACTOR_ID, url: '/collab/capabilities' },
+        {
+          actor: ACTOR_ID,
+          url: `/v2/projects/${PROJECT_ID}/operations/getProjectSnapshot`,
+        },
+      ]);
+    } finally {
+      fetchMock.mockRestore();
+      await new Promise<void>((resolve, reject) => server.close(error => {
+        if (error) reject(error);
+        else resolve();
+      }));
+    }
+  });
+
   it('negotiates package capabilities and maps the strict Cloud snapshot', async () => {
     const requests: CloudAuthorityHttpRequest[] = [];
     const request = jest.fn(async (input: CloudAuthorityHttpRequest) => {
@@ -186,7 +423,7 @@ describe('CloudAuthorityAdapter', () => {
         sensitive: false,
         value: ACTOR_ID,
       }],
-      remoteUrl: `https://cloud.example.test/v1/projects/${PROJECT_ID}/repository.git`,
+      remoteUrl: `https://cloud.example.test/v2/projects/${PROJECT_ID}/repository.git`,
     });
     expect(requests).toEqual([
       expect.objectContaining({
@@ -198,7 +435,7 @@ describe('CloudAuthorityAdapter', () => {
         body: expect.objectContaining({ data: { projectId: PROJECT_ID } }),
         headers: { 'x-claudian-development-actor': ACTOR_ID },
         method: 'POST',
-        url: `https://cloud.example.test/v1/projects/${PROJECT_ID}/operations/getProjectSnapshot`,
+        url: `https://cloud.example.test/v2/projects/${PROJECT_ID}/operations/getProjectSnapshot`,
       }),
     ]);
   });
@@ -246,13 +483,13 @@ describe('CloudAuthorityAdapter', () => {
           idempotencyKey: 'publish-head',
           projectId: PROJECT_ID,
         },
-        protocolVersion: 4,
+        protocolVersion: 6,
         requestId: 'request-ensure',
       },
       headers: { 'x-claudian-development-actor': ACTOR_ID },
       method: 'POST',
       signal: controller.signal,
-      url: `https://cloud.example.test/v1/projects/${PROJECT_ID}/operations/ensureMyRequest`,
+      url: `https://cloud.example.test/v2/projects/${PROJECT_ID}/operations/ensureMyRequest`,
     });
   });
 
@@ -304,13 +541,13 @@ describe('CloudAuthorityAdapter', () => {
           projectId: PROJECT_ID,
           requestId: 'request-one',
         },
-        protocolVersion: 4,
+        protocolVersion: 6,
         requestId: expect.any(String),
       },
       headers: { 'x-claudian-development-actor': ACTOR_ID },
       method: 'POST',
       signal: controller.signal,
-      url: `https://cloud.example.test/v1/projects/${PROJECT_ID}/operations/acceptRequest`,
+      url: `https://cloud.example.test/v2/projects/${PROJECT_ID}/operations/acceptRequest`,
     });
   });
 
@@ -592,14 +829,53 @@ describe('CloudAuthorityAdapter', () => {
     });
     const control = (await new CloudAuthorityAdapter({ request }).create(membership())).control;
 
+    await expect(control.readRequestPage(PROJECT_ID, 'request-one')).resolves.toMatchObject({
+      comments: { comments: [{ id: 'request-comment-one' }], nextCursor: 'request-next' },
+    });
+    expect(request.mock.calls.map(([input]) => input.url.split('/').at(-1))).toEqual([
+      'capabilities', 'getRequest',
+    ]);
     await expect(control.readRequest(PROJECT_ID, 'request-one')).resolves.toMatchObject({
       comments: { comments: [{ id: 'request-comment-one' }, { id: 'request-comment-two' }] },
+    });
+    await expect(control.readTicketPage(PROJECT_ID, 'ticket-one')).resolves.toMatchObject({
+      acceptedRelations: { acceptedRelations: [], nextCursor: 'relation-next' },
+      comments: { comments: [{ id: 'ticket-comment-one' }], nextCursor: 'comment-next' },
     });
     await expect(control.readTicket(PROJECT_ID, 'ticket-one')).resolves.toMatchObject({
       acceptedRelations: { acceptedRelations: [{ id: 'relation-one' }] },
       comments: {
         comments: [{ id: 'ticket-comment-one' }, { id: 'ticket-comment-next' }],
       },
+    });
+  });
+
+  it('rejects a Ticket cursor reused across complete comment and relation collections', async () => {
+    const request = jest.fn()
+      .mockResolvedValueOnce({
+        body: collabCloudCapabilityDocument(['tickets'], limits),
+        contentType: 'application/json',
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        body: collabCloudSuccessEnvelope('response-detail', ticketDetail({
+          acceptedRelations: { acceptedRelations: [], nextCursor: 'same-cursor' },
+          comments: { comments: [], nextCursor: 'same-cursor' },
+        })),
+        contentType: 'application/json',
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        body: collabCloudSuccessEnvelope('response-comments', { comments: [] }),
+        contentType: 'application/json',
+        status: 200,
+      });
+    const control = (await new CloudAuthorityAdapter({ request }).create(membership())).control;
+
+    await expect(control.readTicket(PROJECT_ID, 'ticket-one')).rejects.toMatchObject({
+      code: 'authority-integrity-error',
+      recoveryActions: ['open-diagnostics'],
+      safeContext: { reason: 'cloud-control-relation-cursor-cycled' },
     });
   });
 
@@ -640,7 +916,7 @@ describe('CloudAuthorityAdapter', () => {
     const document = collabCloudCapabilityDocument(['project-snapshot'], limits);
     const adapter = new CloudAuthorityAdapter({
       request: async () => ({
-        body: { ...document, bindingVersions: [2] },
+        body: { ...document, bindingVersions: [1] },
         contentType: 'application/json',
         status: 200,
       }),
@@ -670,54 +946,46 @@ describe('CloudAuthorityAdapter', () => {
     });
   });
 
-  it('cancels a chunked JSON response as soon as the payload limit is crossed', async () => {
-    let pullCount = 0;
-    let cancelled = false;
-    const chunk = new Uint8Array(Math.floor(COLLAB_LIMITS.maxJsonPayloadUtf8Bytes / 2) + 1);
-    const body = new ReadableStream<Uint8Array>({
-      cancel: () => { cancelled = true; },
-      pull: controller => {
-        pullCount += 1;
-        if (pullCount <= 2) controller.enqueue(chunk);
-        else controller.close();
-      },
-    }, { highWaterMark: 0 });
-    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, {
-      headers: { 'content-type': 'application/json' },
-      status: 200,
-    }));
-
-    await expect(new CloudAuthorityAdapter().create(membership())).rejects.toMatchObject({
-      code: 'protocol-payload-invalid',
-      safeContext: { reason: 'cloud-authority-response-too-large' },
-    });
-    expect(cancelled).toBe(true);
-    fetchMock.mockRestore();
-  });
-
-  it('cancels a response rejected by its declared content length', async () => {
-    let cancelled = false;
-    const body = new ReadableStream<Uint8Array>({
-      cancel: () => { cancelled = true; },
-    });
-    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, {
-      headers: {
-        'content-length': String(COLLAB_LIMITS.maxJsonPayloadUtf8Bytes + 1),
-        'content-type': 'application/json',
-      },
-      status: 200,
-    }));
-
-    await expect(new CloudAuthorityAdapter().create(membership())).rejects.toMatchObject({
-      code: 'protocol-payload-invalid',
-      safeContext: { reason: 'cloud-authority-response-too-large' },
-    });
-    expect(cancelled).toBe(true);
-    fetchMock.mockRestore();
-  });
 });
 
 describe('CloudProjectEventClient', () => {
+  it('preserves the terminal retirement identity instead of degrading it to a snapshot', async () => {
+    const socket = new FakeSocket();
+    const onInvalidation = jest.fn(async invalidation => invalidation.sequence);
+    const client = new CloudProjectEventClient({
+      afterSequence: 3,
+      developmentActorId: ACTOR_ID,
+      projectId: PROJECT_ID,
+      serverUrl: 'https://cloud.example.test',
+    }, onInvalidation, {
+      createSocket: () => socket,
+    });
+
+    client.start();
+    socket.open();
+    await flush();
+    socket.message(JSON.stringify({
+      kind: 'project.retired',
+      occurredAt: '2026-08-27T00:00:00.000Z',
+      payload: {
+        retiredAt: '2026-08-27T00:00:00.000Z',
+        retirementId: 'retirement-cloud-one',
+      },
+      projectId: PROJECT_ID,
+      protocolVersion: 6,
+      sequence: 4,
+    }));
+    await flush();
+
+    expect(onInvalidation).toHaveBeenLastCalledWith({
+      kind: 'retired',
+      retiredAt: '2026-08-27T00:00:00.000Z',
+      retirementId: 'retirement-cloud-one',
+      sequence: 4,
+    });
+    client.dispose();
+  });
+
   it('refreshes snapshot first, detects a gap, and reconnects after the applied cursor', async () => {
     const sockets: FakeSocket[] = [];
     const scheduled: Array<() => void> = [];
@@ -733,7 +1001,7 @@ describe('CloudProjectEventClient', () => {
         sockets.push(socket);
         expect(input).toEqual({
           headers: { 'x-claudian-development-actor': ACTOR_ID },
-          url: `wss://cloud.example.test/v1/projects/${PROJECT_ID}/events?afterSequence=${
+          url: `wss://cloud.example.test/v2/projects/${PROJECT_ID}/events?afterSequence=${
             sockets.length === 1 ? 3 : 5
           }`,
         });
@@ -781,7 +1049,7 @@ describe('CloudProjectEventClient', () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         expect(input.url).toBe(
-          `wss://cloud.example.test/v1/projects/${PROJECT_ID}/events?afterSequence=${
+          `wss://cloud.example.test/v2/projects/${PROJECT_ID}/events?afterSequence=${
             sockets.length === 1 ? 3 : 4
           }`,
         );
@@ -801,7 +1069,7 @@ describe('CloudProjectEventClient', () => {
       occurredAt: '2026-08-22T00:00:00.000Z',
       payload: { requestId: 'request-one' },
       projectId: PROJECT_ID,
-      protocolVersion: 4,
+      protocolVersion: 6,
       sequence: 4,
     }));
     sockets[0]!.closed(1006);
@@ -839,7 +1107,7 @@ describe('CloudProjectEventClient', () => {
         occurredAt: '2026-08-22T00:00:00.000Z',
         payload: { requestId: `request-${sequence}` },
         projectId: PROJECT_ID,
-        protocolVersion: 4,
+        protocolVersion: 6,
         sequence,
       }));
     }
@@ -875,7 +1143,7 @@ describe('CloudProjectEventClient', () => {
       occurredAt: '2026-08-22T00:00:00.000Z',
       payload: { requestId: 'request-four' },
       projectId: PROJECT_ID,
-      protocolVersion: 4,
+      protocolVersion: 6,
       sequence: 4,
     }));
     await flush();

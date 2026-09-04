@@ -1,3 +1,5 @@
+import { TEST_INSTALLATION_A } from '@test/helpers/installations';
+
 import {
   createCloudBootstrapTransitionRecord,
   markCloudBootstrapHostStopped,
@@ -23,6 +25,7 @@ import {
 
 function activatedRecord() {
   const pending = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
     developmentActorId: HOST_MEMBER_ID,
     fenceId: 'bootstrap-fence-one',
     manifest: bootstrapManifest(),
@@ -181,13 +184,13 @@ describe('LocalCloudBootstrapBindingEffects', () => {
       projects: {
         loadMembership: jest.fn(async () => membership),
         repairIndexFromMemberships,
-        retireAuthorityDirectory: jest.fn(async () => '/retired'),
         saveMembership,
       },
       readiness: { collect: jest.fn(async () => ({
         clientReadiness: {} as never,
         observedPersonalRefOid: HOST_OID,
       })) },
+      retireLanAuthorityDirectory: jest.fn(async () => '/retired'),
       workspace: { resolveManagedProjectPath: jest.fn(async () => '/vault/workspace/project-alpha') },
     });
 
@@ -208,12 +211,12 @@ describe('LocalCloudBootstrapBindingEffects', () => {
       undefined,
     );
     expect(membership.authority).toEqual({
-      bindingVersion: 1,
+      bindingVersion: 2,
       developmentActorId: HOST_MEMBER_ID,
       gitRemoteUrl: record.newAuthority.gitRemoteUrl,
       kind: 'cloud',
       serverUrl: record.newAuthority.serverUrl,
-      wireVersion: 4,
+      wireVersion: 6,
     });
     expect(JSON.stringify(membership)).not.toContain('credential');
     expect(JSON.stringify(membership)).not.toContain('PRIVATE CA');
@@ -286,10 +289,10 @@ describe('LocalCloudBootstrapBindingEffects', () => {
       projects: {
         loadMembership: jest.fn(async () => membership),
         repairIndexFromMemberships: jest.fn(),
-        retireAuthorityDirectory: jest.fn(),
         saveMembership: jest.fn(),
       },
       readiness: { collect: jest.fn() },
+      retireLanAuthorityDirectory: jest.fn(),
       workspace: { resolveManagedProjectPath: jest.fn(async () => '/vault/workspace/project-alpha') },
     });
 
@@ -349,13 +352,13 @@ describe('LocalCloudBootstrapBindingEffects', () => {
       projects: {
         loadMembership: async () => membership,
         repairIndexFromMemberships: jest.fn(),
-        retireAuthorityDirectory: async () => {
-          events.push('retire');
-          return '/retired';
-        },
         saveMembership: jest.fn(),
       },
       readiness: { collect: jest.fn() },
+      retireLanAuthorityDirectory: async () => {
+        events.push('retire');
+        return '/retired';
+      },
       workspace: { resolveManagedProjectPath: jest.fn() },
     });
 

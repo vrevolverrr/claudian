@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import {
+  COLLAB_CHECKPOINT_ARTIFACT_LIMITS,
   COLLAB_CLOUD_BINDING_LIMITS,
   COLLAB_LIMITS,
   COLLAB_MAIN_REF,
@@ -16,6 +17,7 @@ import {
   type DevelopmentBootstrapManifest,
   matchCollabCloudRoute,
 } from '@claudian-collab/protocol';
+import { TEST_INSTALLATION_A } from '@test/helpers/installations';
 import { WebSocketServer } from 'ws';
 
 import {
@@ -262,6 +264,11 @@ async function runGitHttpBackend(
 async function startGateServer(repository: RepositoryFixture): Promise<GateServer> {
   const manifest = bootstrapManifest(repository);
   const limits = {
+    maxCheckpointCoordinationBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxCoordinationBytes,
+    maxCheckpointManifestUtf8Bytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxManifestBytes,
+    maxCheckpointRepositoryBundleBytes:
+      COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxRepositoryBundleBytes,
+    maxCheckpointStagingBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxStagingBytes,
     maxDevelopmentBootstrapGitBundleBytes: 1024,
     maxDevelopmentBootstrapManifestUtf8Bytes: 1024,
     maxDevelopmentBootstrapReportUtf8Bytes: 1024,
@@ -334,7 +341,7 @@ async function startGateServer(repository: RepositoryFixture): Promise<GateServe
         match.kind === 'git-info-refs'
         || match.kind === 'git-upload-pack'
       ) {
-        const prefix = `/v1/projects/${PROJECT_ID}/repository.git`;
+        const prefix = `/v2/projects/${PROJECT_ID}/repository.git`;
         const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
         await runGitHttpBackend(request, response, repository, pathname.slice(prefix.length));
         return;
@@ -454,7 +461,9 @@ async function createClient(
 ): Promise<ClientFixture> {
   const vaultRoot = path.join(root, memberId);
   await mkdir(vaultRoot);
-  const projects = new CollabLocalProjectRepository(vaultRoot);
+  const projects = new CollabLocalProjectRepository(vaultRoot, {
+    installationKey: TEST_INSTALLATION_A,
+  });
   const workspace = new CollabWorkspaceService(vaultRoot);
   await workspace.claimProjectsFolder('workspace');
   const repositoryPath = path.join(vaultRoot, 'workspace', PROJECT_ID);
@@ -472,12 +481,15 @@ async function createClient(
   });
   await projects.saveMembership(membership(memberId, ownsAuthority));
   if (ownsAuthority) {
-    const authorityDirectory = await projects.ensureAuthorityDirectory(PROJECT_ID);
+    const authorityDirectory = (
+      await projects.createOwnedAuthorityDirectory(PROJECT_ID)
+    ).authorityDirectory;
     await writeFile(path.join(authorityDirectory, 'collab.db'), 'inert after binding');
   }
   const manifest = bootstrapManifest(repository);
-  const store = new CloudBootstrapTransitionStore(vaultRoot);
+  const store = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
   let transition = await store.create(createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
     developmentActorId: memberId,
     ...(ownsAuthority ? { fenceId: 'bootstrap-cloud-gate-fence' } : {}),
     manifest,
@@ -540,7 +552,6 @@ async function createClient(
       authorityLifecycle: { closeAuthority: async () => undefined },
       git: {
         assertOrigin: (record, localPath) => ensureTrustedCollabOrigin(repositories, {
-          allowHostRemoteRepair: false,
           projectId: record.projectId,
           remoteUrl: record.newAuthority.gitRemoteUrl,
           repositoryPath: localPath,
@@ -559,6 +570,12 @@ async function createClient(
       readiness: new CloudBootstrapReadinessCollector({
         inspect: async () => readiness(manifest, memberId),
       }),
+      retireLanAuthorityDirectory: async (retiredProjectId, attemptId) => (
+        projects.retireOwnedAuthorityDirectory(
+          await projects.assertOwnedAuthorityRetirement(retiredProjectId, attemptId),
+          attemptId,
+        )
+      ),
       workspace,
     }),
     now: () => new Date('2026-08-22T00:01:00.000Z'),
@@ -590,7 +607,7 @@ describe('Cloud read and binding gate', () => {
         expect(JSON.stringify(storedMembership)).not.toContain('CERTIFICATE');
         expect((await client.projects.loadIndex()).projects[0]?.authorityKind).toBe('cloud');
         expect(await git(client.repositoryPath, ['remote', 'get-url', 'origin']))
-          .toBe(`${server.origin}/v1/projects/${PROJECT_ID}/repository.git`);
+          .toBe(`${server.origin}/v2/projects/${PROJECT_ID}/repository.git`);
         expect(await readFile(path.join(client.repositoryPath, 'unpublished.md'), 'utf8'))
           .toBe(`${storedMembership?.member.id} local work\n`);
 
@@ -620,14 +637,17 @@ describe('Cloud read and binding gate', () => {
         const fenceUncertainProject = jest.fn(async () => undefined);
         const recoverProject = jest.fn(async () => restarted);
         const restartService = new CloudBootstrapService({
+          assertHostInstallationOwned: async () => undefined,
+          assertRecoveryOwner: () => undefined,
           createCoordinator: () => ({ recoverProject } as unknown as CloudBootstrapCoordinator),
           fenceUncertainProject,
+          projectRecoveryAdmission: async (_projectId, operation) => operation(),
           recoverLocalArtifacts: async () => undefined,
           transitions: client.store,
         });
         await restartService.recoverPending();
         expect(fenceUncertainProject).not.toHaveBeenCalled();
-        expect(recoverProject).toHaveBeenCalledWith(PROJECT_ID, expect.any(AbortSignal));
+        expect(recoverProject).not.toHaveBeenCalled();
         await restartService.close();
       }
       expect(snapshots[0]?.project).toEqual(snapshots[1]?.project);

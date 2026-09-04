@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  COLLAB_CHECKPOINT_ARTIFACT_LIMITS,
   COLLAB_LIMITS,
   collabCloudCapabilityDocument,
   collabCloudSuccessEnvelope,
@@ -28,9 +29,11 @@ import {
 } from '@/app/collab/publish/PublishCoordinator';
 import {
   CloudAuthorityAdapter,
-  type CloudAuthorityHttpRequest,
-  type CloudAuthorityHttpResponse,
 } from '@/app/collab/remote-authority/CloudAuthorityAdapter';
+import type {
+  CloudAuthorityHttpRequest,
+  CloudAuthorityHttpResponse,
+} from '@/app/collab/remote-authority/NodeCloudAuthorityHttpTransport';
 import { CollabError } from '@/core/collab/ClaudianCollabError';
 
 jest.setTimeout(30_000);
@@ -106,7 +109,6 @@ describe('Cloud Publish recovery integration', () => {
       request: input => transport.request(input),
     }).create(membership(authorityPath));
     const context: PublishProjectContext = {
-      allowHostRemoteRepair: false,
       memberId: ACTOR_ID,
       personalRef: PERSONAL_REF,
       projectId: PROJECT_ID,
@@ -215,10 +217,10 @@ class LostResponseCloudTransport {
 
 class DirectNetwork implements PublishGitNetworkPort {
   withNetwork<T>(
-    _context: PublishProjectContext,
-    operation: () => Promise<T>,
+    context: PublishProjectContext,
+    operation: Parameters<PublishGitNetworkPort['withNetwork']>[1],
   ): Promise<T> {
-    return operation();
+    return operation(undefined, context.remoteUrl!) as Promise<T>;
   }
 }
 
@@ -242,12 +244,12 @@ class MemoryPublicationState {
 function membership(gitRemoteUrl: string): CollabLocalCloudMembershipRecord {
   return {
     authority: {
-      bindingVersion: 1,
+      bindingVersion: 2,
       developmentActorId: ACTOR_ID,
       gitRemoteUrl,
       kind: 'cloud',
       serverUrl: 'https://cloud.example.test',
-      wireVersion: 4,
+      wireVersion: 6,
     },
     createdAt: CREATED_AT,
     lastEventSequence: 0,
@@ -270,6 +272,11 @@ function membership(gitRemoteUrl: string): CollabLocalCloudMembershipRecord {
 
 function capabilityLimits() {
   return {
+    maxCheckpointCoordinationBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxCoordinationBytes,
+    maxCheckpointManifestUtf8Bytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxManifestBytes,
+    maxCheckpointRepositoryBundleBytes:
+      COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxRepositoryBundleBytes,
+    maxCheckpointStagingBytes: COLLAB_CHECKPOINT_ARTIFACT_LIMITS.maxStagingBytes,
     maxDevelopmentBootstrapGitBundleBytes: 1_024,
     maxDevelopmentBootstrapManifestUtf8Bytes: 1_024,
     maxDevelopmentBootstrapReportUtf8Bytes: 1_024,

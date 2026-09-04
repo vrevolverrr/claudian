@@ -9,6 +9,9 @@ import { AuthorityEventRepository } from '@/app/collab/authority/AuthorityEventR
 import { AuthorityIdempotencyRepository } from '@/app/collab/authority/AuthorityIdempotencyRepository';
 import { ProjectAuthorityRepository } from '@/app/collab/authority/ProjectAuthorityRepository';
 import { SqlJsProjectDatabase } from '@/app/collab/authority/SqlJsProjectDatabase';
+import {
+  AuthorityMemberCredentialAuthenticator,
+} from '@/app/collab/lan/AuthorityMemberCredentialAuthenticator';
 import { InvitationCodec } from '@/app/collab/lan/InvitationCodec';
 import { PendingMembershipService } from '@/app/collab/lan/PendingMembershipService';
 
@@ -85,6 +88,16 @@ describe('PendingMembershipService', () => {
     await rm(root, { force: true, recursive: true });
   });
 
+  it('authenticates a bound active Member through the narrow terminal boundary', async () => {
+    const authenticator = new AuthorityMemberCredentialAuthenticator(database);
+
+    await expect(authenticator.authenticate(HOST_CREDENTIAL, ['active']))
+      .resolves.toMatchObject({ member: { id: 'member-host' } });
+    await expect(authenticator.authenticate(Buffer.alloc(32, 8).toString('base64url'), [
+      'active',
+    ])).rejects.toMatchObject({ code: 'authentication-failed' });
+  });
+
   it('rotates and revokes invitations while persisting only their digest', async () => {
     const first = await service.createInvitation(HOST_CREDENTIAL, {
       idempotencyKey: 'create-invite-1',
@@ -124,6 +137,23 @@ describe('PendingMembershipService', () => {
     }, { remoteAddress: '127.0.0.2' })).rejects.toMatchObject({
       code: 'invitation-revoked',
     });
+  });
+
+  it('rejects an imported active Member until an exact credential is bound', async () => {
+    await database.mutate(connection => connection.run(`
+      INSERT INTO members (
+        member_id, display_name, personal_ref, role, status, access_state,
+        credential_hash, join_attempt_id, created_at, activated_at, revoked_at
+      ) VALUES (
+        'member-unbound', 'Unbound', 'refs/heads/members/member-unbound',
+        'member', 'active', 'unbound', NULL, NULL, ?, ?, NULL
+      )
+    `, [now.toISOString(), now.toISOString()]));
+
+    await expect(service.authenticateMemberCredential(
+      Buffer.alloc(32, 8).toString('base64url'),
+      ['active'],
+    )).rejects.toMatchObject({ code: 'authentication-failed' });
   });
 
   it('reuses one pending membership and rotates its credential on a retry', async () => {

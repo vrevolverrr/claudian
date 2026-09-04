@@ -41,7 +41,9 @@ function createRepository(conversation = createConversation()) {
     deleteCurrentMetadata: jest.fn().mockResolvedValue(undefined),
     deleteLegacyMetadata: jest.fn().mockResolvedValue(undefined),
     deleteInputLedger: jest.fn().mockResolvedValue(undefined),
+    assignMetadataToDevice: jest.fn().mockResolvedValue(undefined),
     isDeleted: jest.fn().mockResolvedValue(false),
+    assertMetadataWriteAuthority: jest.fn().mockResolvedValue(undefined),
     markDeleted: jest.fn().mockResolvedValue(undefined),
     loadMessages: jest.fn().mockResolvedValue(null),
     saveMessages: jest.fn().mockResolvedValue(undefined),
@@ -619,7 +621,7 @@ describe('ConversationRepository hydration', () => {
     await repository.adoptMetadataConversations([{
       conversation: deferred,
       needsMigration: false,
-      source: 'current',
+      source: 'device',
     }]);
 
     expect(repository.getCachedConversation(deferred.id)).toBe(deferred);
@@ -639,7 +641,7 @@ describe('ConversationRepository hydration', () => {
     await expect(repository.adoptMetadataConversations([{
       conversation: deferred,
       needsMigration: false,
-      source: 'current',
+      source: 'device',
     }])).rejects.toThrow('disk full');
     expect(repository.getCachedConversation(deferred.id)).toBeNull();
     expect(deferred.selectedModel).toBe('claude-code/retired-model');
@@ -647,7 +649,7 @@ describe('ConversationRepository hydration', () => {
     await repository.adoptMetadataConversations([{
       conversation: deferred,
       needsMigration: false,
-      source: 'current',
+      source: 'device',
     }]);
     expect(persistence.saveMetadata).toHaveBeenCalledTimes(2);
     expect(persistence.saveMetadata).toHaveBeenLastCalledWith(expect.objectContaining({

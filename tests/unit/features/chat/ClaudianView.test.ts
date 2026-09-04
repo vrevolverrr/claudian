@@ -173,6 +173,48 @@ function createViewHarness(options: {
 }
 
 describe('ClaudianView tab controls', () => {
+  it('builds chat navigation actions as native buttons without changing their handlers', () => {
+    const requestNewTab = jest.fn();
+    const requestNewConversation = jest.fn();
+    const toggleHistoryDropdown = jest.fn();
+    const view = Object.create(ClaudianView.prototype) as any;
+
+    Object.assign(view, {
+      containerEl: createMockEl(),
+      handleTabClick: jest.fn(),
+      handleTabClose: jest.fn(),
+      persistTabWorkspaceState: jest.fn(),
+      plugin: {},
+      requestNewConversation,
+      requestNewTab,
+      toggleHistoryDropdown,
+    });
+
+    const navContent = view.buildNavRowContent();
+    const newTabButton = navContent.querySelector('.claudian-new-tab-btn')!;
+    const newConversationButton = navContent.querySelector('.claudian-new-conversation-btn')!;
+    const historyButton = navContent.querySelector('.claudian-history-container')!.children[0];
+    const buttons = [newTabButton, newConversationButton, historyButton];
+
+    expect(buttons.map(button => button.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON']);
+    expect(buttons.map(button => button.getAttribute('type'))).toEqual([
+      'button',
+      'button',
+      'button',
+    ]);
+    expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual([
+      'New tab',
+      'New conversation',
+      'Chat history',
+    ]);
+
+    buttons.forEach(button => button.click());
+
+    expect(requestNewTab).toHaveBeenCalledTimes(1);
+    expect(requestNewConversation).toHaveBeenCalledTimes(1);
+    expect(toggleHistoryDropdown).toHaveBeenCalledTimes(1);
+  });
+
   it('focuses the composer after creating a new tab', async () => {
     const inputEl = createMockEl('textarea') as unknown as HTMLTextAreaElement;
     inputEl.focus = jest.fn();
@@ -3718,6 +3760,13 @@ describe('ClaudianView Escape handling', () => {
             return ref;
           }),
         },
+        metadataCache: {
+          on: jest.fn((_event: string, handler: unknown) => {
+            const ref = { handler };
+            eventRefs.push(ref);
+            return ref;
+          }),
+        },
       },
     };
     view.tabManager = {
@@ -3733,6 +3782,9 @@ describe('ClaudianView Escape handling', () => {
             markFolderCacheDirty: jest.fn(),
             handleFileOpen: jest.fn(),
             handleClickOutside: jest.fn(),
+          },
+          linkedContentController: {
+            handleActiveFileMetadataChanged: jest.fn(),
           },
         },
       }),
@@ -3780,6 +3832,13 @@ describe('ClaudianView Escape handling', () => {
             return ref;
           }),
         },
+        metadataCache: {
+          on: jest.fn((_event: string, handler: unknown) => {
+            const ref = { handler };
+            eventRefs.push(ref);
+            return ref;
+          }),
+        },
       },
     };
     view.tabManager = {
@@ -3795,6 +3854,9 @@ describe('ClaudianView Escape handling', () => {
             markFolderCacheDirty: jest.fn(),
             handleFileOpen: jest.fn(),
             handleClickOutside: jest.fn(),
+          },
+          linkedContentController: {
+            handleActiveFileMetadataChanged: jest.fn(),
           },
         },
       }),
@@ -3944,6 +4006,45 @@ describe('ClaudianView Escape handling', () => {
 
     expect(cancelStreaming).not.toHaveBeenCalled();
     expect(result).toBe(false);
+  });
+
+  it('routes metadata cache refreshes to the active tab Linked content owner', () => {
+    const { view } = createEscapeHarness({ isStreaming: false });
+    const handleActiveFileMetadataChanged = jest.fn();
+    view.tabManager.getActiveTab.mockReturnValue({
+      state: { isStreaming: false },
+      controllers: {
+        conversationController: { cancelInlineRename: jest.fn().mockReturnValue(false) },
+        inputController: { cancelStreaming: jest.fn() },
+      },
+      ui: {
+        composerDropdown: {
+          containsElement: jest.fn().mockReturnValue(false),
+          hide: jest.fn(),
+        },
+        linkedContentController: { handleActiveFileMetadataChanged },
+      },
+    });
+    const file = { path: 'Notes/Current.md' };
+
+    view.wireEventHandlers();
+    const changedHandler = view.plugin.app.metadataCache.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'changed',
+    )?.[1] as (changedFile: unknown) => void;
+    const resolveHandler = view.plugin.app.metadataCache.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'resolve',
+    )?.[1] as (resolvedFile: unknown) => void;
+    const resolvedHandler = view.plugin.app.metadataCache.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'resolved',
+    )?.[1] as () => void;
+
+    changedHandler(file);
+    resolveHandler(file);
+    resolvedHandler();
+
+    expect(handleActiveFileMetadataChanged).toHaveBeenNthCalledWith(1, file);
+    expect(handleActiveFileMetadataChanged).toHaveBeenNthCalledWith(2, file);
+    expect(handleActiveFileMetadataChanged).toHaveBeenNthCalledWith(3, null);
   });
 
   it('commits a provisional preview before the Shift+Tab plan-mode action', () => {

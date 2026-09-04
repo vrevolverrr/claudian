@@ -12,10 +12,14 @@ import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { COLLAB_LIMITS } from '@claudian-collab/protocol';
+import {
+  COLLAB_LIMITS,
+  type CollabAuthorityTransferStatus,
+} from '@claudian-collab/protocol';
 import initSqlJs, { type SqlJsStatic } from 'sql.js';
 import { WebSocket } from 'ws';
 
+import { CollabProjectWorkSessionRegistry } from '@/app/collab/activity/CollabProjectWorkSession';
 import { AuthorityEventRepository } from '@/app/collab/authority/AuthorityEventRepository';
 import { AuthorityIdempotencyRepository } from '@/app/collab/authority/AuthorityIdempotencyRepository';
 import { ManagerResponsibilityService } from '@/app/collab/authority/ManagerResponsibilityService';
@@ -23,7 +27,7 @@ import { ProjectAuthorityRepository } from '@/app/collab/authority/ProjectAuthor
 import { RequestQueryService } from '@/app/collab/authority/RequestQueryService';
 import { SqlJsProjectDatabase } from '@/app/collab/authority/SqlJsProjectDatabase';
 import { TicketService } from '@/app/collab/authority/TicketService';
-import { CollabClientProjection } from '@/app/collab/client/CollabClientProjection';
+import { CollabClientProjection, type CollabClientProjectionOptions } from '@/app/collab/client/CollabClientProjection';
 import {
   CollabLocalProjectRepository,
   isCollabLocalLanMembership,
@@ -32,10 +36,12 @@ import { COLLAB_LOCAL_PROJECT_SCHEMA_VERSION } from '@/app/collab/CollabSchemaVe
 import {
   createHostTransferRecoveryRecord,
 } from '@/app/collab/host-transfer/HostTransferRecovery';
+import { LanAuthorityTransferClient } from '@/app/collab/lan/authority-transfer/LanAuthorityTransferClient';
 import {
   type CollabHostTrustStore,
   CollabHttpClient,
   type CollabTrustedHost,
+  PinnedCollabHttpClient,
 } from '@/app/collab/lan/CollabHttpClient';
 import { HostTransferTargetTransport } from '@/app/collab/lan/HostTransferTargetTransport';
 import { InvitationCodec } from '@/app/collab/lan/InvitationCodec';
@@ -53,16 +59,87 @@ import {
   ProjectEventHub,
   SqlJsProjectEventSource,
 } from '@/app/collab/lan/ProjectEventHub';
+import { LanAuthorityProjectionTransitionCoordinator } from '@/app/collab/LanAuthorityProjectionTransitionCoordinator';
+import type {
+  CollabProjectLifecycleAuthorityAdmission,
+} from '@/app/collab/lifecycle/CollabProjectLifecycleAdmission';
 import { CollabMembershipService } from '@/app/collab/membership/CollabMembershipService';
+import { LocalMembershipControlPort } from '@/app/collab/membership/LocalMembershipControlPort';
 import {
   ManagerResponsibilityOperationCoordinator,
 } from '@/app/collab/membership/ManagerResponsibilityOperationCoordinator';
 import { LocalProjectControlPort } from '@/app/collab/publish/LocalProjectControlPort';
 import { ReconnectProjectCoordinator } from '@/app/collab/reconnect/ReconnectProjectCoordinator';
+import { CollabAuthoritySessionFactory } from '@/app/collab/remote-authority/CollabAuthoritySessionFactory';
+import { LanAuthorityAdapter } from '@/app/collab/remote-authority/LanAuthorityAdapter';
+import { CollabError } from '@/core/collab/ClaudianCollabError';
+import { parseInstallationKey } from '@/core/device/InstallationKey';
 
 const HOST_CREDENTIAL = Buffer.alloc(32, 1).toString('base64url');
 const PROJECT_ID = 'project-alpha';
 const MAIN_OID = 'a'.repeat(40);
+const INSTALLATION_A = parseInstallationKey(`device-${'a'.repeat(64)}`);
+const INSTALLATION_B = parseInstallationKey(`device-${'b'.repeat(64)}`);
+const projectionRegistries = new Set<CollabProjectWorkSessionRegistry>();
+
+function projectionOptions(): Pick<CollabClientProjectionOptions, 'authoritySessions' | 'sessions'> {
+  const sessions = new CollabProjectWorkSessionRegistry();
+  projectionRegistries.add(sessions);
+  return {
+    authoritySessions: new CollabAuthoritySessionFactory([new LanAuthorityAdapter()]),
+    sessions,
+  };
+}
+
+function hostLockPath(root: string): string {
+  return path.join(
+    root,
+    '.claudian',
+    'collab',
+    'installations',
+    INSTALLATION_A,
+    'lan-host.lock',
+  );
+}
+
+function authorityTransferStatus(
+  phase: 'collecting-readiness' | 'source-relinquished',
+): CollabAuthorityTransferStatus {
+  const relinquished = phase === 'source-relinquished';
+  const proof = relinquished ? {
+    batchRevision: 1,
+    batchSha256: 'b'.repeat(64),
+    certificate: Buffer.alloc(64, 7).toString('base64url'),
+    certificateAlgorithm: 'ed25519' as const,
+    checkpointSha256: 'a'.repeat(64),
+    committedAt: '2026-08-08T00:00:08.000Z',
+    operationIntentId: 'intent-listener-transfer',
+    projectId: PROJECT_ID,
+    sourceAuthority: { generation: 1, kind: 'lan' as const },
+    sourceHostMemberId: 'member-host',
+    targetAuthority: { generation: 2, kind: 'cloud' as const },
+    transferId: 'transfer-listener',
+  } : null;
+  return {
+    batchRevision: relinquished ? 1 : null,
+    batchSha256: relinquished ? 'b'.repeat(64) : null,
+    checkpointSha256: relinquished ? 'a'.repeat(64) : null,
+    createdAt: '2026-08-08T00:00:00.000Z',
+    direction: 'lan-to-cloud',
+    expiresAt: '2026-09-07T00:00:00.000Z',
+    phase,
+    projectId: PROJECT_ID,
+    relinquishmentProof: proof,
+    sourceAuthority: { generation: 1, kind: 'lan' },
+    state: 'active',
+    targetAuthority: { generation: 2, kind: 'cloud' },
+    targetUrl: 'https://cloud.example.test',
+    transferId: 'transfer-listener',
+    updatedAt: relinquished
+      ? '2026-08-08T00:00:09.000Z'
+      : '2026-08-08T00:00:01.000Z',
+  };
+}
 
 class MemoryTrustStore implements CollabHostTrustStore {
   readonly values = new Map<string, CollabTrustedHost>();
@@ -103,14 +180,15 @@ function readPinnedUrl(url: string, ca: string): Promise<string> {
   });
 }
 
-function membershipAccess(
+async function membershipAccess(
   projects: CollabLocalProjectRepository,
-): { readonly projection: CollabClientProjection; readonly service: CollabMembershipService } {
+): Promise<{ readonly projection: CollabClientProjection; readonly service: CollabMembershipService }> {
   const membership = { service: null as CollabMembershipService | null };
   const projection = new CollabClientProjection(
     projects,
     new LocalProjectControlPort(projects),
     {
+      ...projectionOptions(),
       managerResponsibility: {
         reconcileSnapshot: snapshot => {
           if (!membership.service) throw new Error('Membership service unavailable');
@@ -119,11 +197,16 @@ function membershipAccess(
       },
     },
   );
-  const service = new CollabMembershipService(projects, {
+  const record = await projects.loadMembership(PROJECT_ID);
+  if (!record || !isCollabLocalLanMembership(record)) {
+    throw new Error('LAN membership unavailable');
+  }
+  const service = new CollabMembershipService(new LocalMembershipControlPort(record), {
     readCoordinationSnapshot: (projectId, options) => (
       projection.readSnapshot(projectId, options)
     ),
   }, {}, {
+    managerResponsibilityAdmission: async (_projectId, operation) => operation(),
     managerReceipts: {
       load: async () => null,
       remove: async () => false,
@@ -153,14 +236,28 @@ describe('LanHostCoordinator production transport', () => {
   let advertiseProject: jest.Mock;
   let advertisementStop: jest.Mock;
   let addressMonitorClose: jest.Mock;
+  let createAddressMonitor: jest.Mock;
   let checkHostAddress: () => Promise<void>;
   let issueServerIdentity: (address: string) => Promise<LanTlsServerIdentity>;
   let privateAddresses: readonly string[];
   let openProjectCount: number;
+  let assertHostInstallationOwned: jest.Mock;
   let resetProjectConnection: jest.Mock;
+  let acceptHostTransferAuthority: jest.Mock;
+  let cancelHostTransferAuthority: jest.Mock;
+  let retireProjectAuthority: jest.Mock;
+  let admittedLifecycleOwners: string[];
+  let lifecycleAdmissionErrors: {
+    hostTransfer: Error | null;
+    retirement: Error | null;
+  };
+  let authorityTransferNow: Date | null;
+  let authorityTransferTimeoutOverride: ((callback: () => void, milliseconds: number) => number)
+    | null;
   let outgoingHostTransfer: {
     close?: jest.Mock;
     inspectStartupRecovery: jest.Mock;
+    prepareAccepted?: jest.Mock;
     prepareCancellation?: jest.Mock;
     prepareTerminalRecoveryBeforeStartup?: jest.Mock;
     resume: jest.Mock;
@@ -205,7 +302,9 @@ describe('LanHostCoordinator production transport', () => {
   beforeAll(async () => {
     SQL = await initSqlJs();
     tlsFixtureRoot = await mkdtemp(path.join(tmpdir(), 'claudian-lan-host-tls-'));
-    const identity = new LanTlsIdentity(tlsFixtureRoot);
+    const identity = new LanTlsIdentity(tlsFixtureRoot, {
+      installationKey: INSTALLATION_A,
+    });
     const serverIdentities = new Map<string, LanTlsServerIdentity>();
     serverIdentities.set(
       '127.0.0.1',
@@ -228,17 +327,37 @@ describe('LanHostCoordinator production transport', () => {
   });
 
   beforeEach(async () => {
+    authorityTransferNow = null;
+    authorityTransferTimeoutOverride = null;
     advertisementStop = jest.fn(async () => undefined);
     advertiseProject = jest.fn(async () => ({ stop: advertisementStop }));
     addressMonitorClose = jest.fn();
     checkHostAddress = async () => undefined;
+    createAddressMonitor = jest.fn((check: () => Promise<void>) => {
+      checkHostAddress = check;
+      return { close: addressMonitorClose };
+    });
     issueServerIdentity = address => sharedTlsIdentity.issueServerIdentity(address);
     privateAddresses = ['127.0.0.1'];
     outgoingHostTransfer = null;
+    acceptHostTransferAuthority = jest.fn(async () => {
+      throw new Error('Unexpected Host-transfer acceptance');
+    });
+    cancelHostTransferAuthority = jest.fn(async () => {
+      throw new Error('Unexpected Host-transfer cancellation');
+    });
+    retireProjectAuthority = jest.fn(async () => {
+      throw new Error('Unexpected Project retirement');
+    });
+    admittedLifecycleOwners = [];
+    lifecycleAdmissionErrors = { hostTransfer: null, retirement: null };
     openProjectCount = 0;
+    assertHostInstallationOwned = jest.fn().mockResolvedValue(undefined);
     resetProjectConnection = jest.fn();
     root = await mkdtemp(path.join(tmpdir(), 'claudian-lan-host-'));
-    localProjects = new CollabLocalProjectRepository(root);
+    localProjects = new CollabLocalProjectRepository(root, {
+      installationKey: INSTALLATION_A,
+    });
     await localProjects.saveMembership({
       authority: {
         endpoint: null,
@@ -265,7 +384,9 @@ describe('LanHostCoordinator production transport', () => {
       schemaVersion: COLLAB_LOCAL_PROJECT_SCHEMA_VERSION,
       updatedAt: '2026-08-08T00:00:00.000Z',
     });
-    const authorityDirectory = await localProjects.ensureAuthorityDirectory(PROJECT_ID);
+    const authorityDirectory = (
+      await localProjects.createOwnedAuthorityDirectory(PROJECT_ID)
+    ).authorityDirectory;
     authorityDatabase = new SqlJsProjectDatabase(authorityDirectory, {
       loadSqlJs: async () => SQL,
     });
@@ -291,10 +412,13 @@ describe('LanHostCoordinator production transport', () => {
     if (!address || typeof address === 'string') throw new Error('Occupied port missing');
     occupiedPort = address.port;
     coordinator = new LanHostCoordinator({
-      createAddressMonitor: check => {
-        checkHostAddress = check;
-        return { close: addressMonitorClose };
+      assertHostInstallationOwned,
+      commitHostedRoute: (_expected, next) => localProjects.saveMembership(next),
+      installationKey: INSTALLATION_A,
+      clearAuthorityTransferExpiryTimeout: handle => {
+        if (!authorityTransferTimeoutOverride) window.clearTimeout(handle);
       },
+      createAddressMonitor,
       createGitProxy,
       createInvitationCodec: hostAddress => new InvitationCodec({
         isAddressAllowed: addressValue => addressValue === hostAddress,
@@ -302,6 +426,7 @@ describe('LanHostCoordinator production transport', () => {
       getPrivateIpv4Addresses: () => privateAddresses,
       discovery: { advertiseProject },
       localProjects,
+      now: () => authorityTransferNow ?? new Date(),
       openProject: async projectId => {
         openProjectCount += 1;
         if (projectId !== PROJECT_ID) throw new Error('Unexpected Project');
@@ -328,11 +453,11 @@ describe('LanHostCoordinator production transport', () => {
           events: eventHub,
           git: gitRuntime(),
           lifecycle: {
-            acceptHostTransfer: unsupportedLifecycle,
+            acceptHostTransfer: acceptHostTransferAuthority,
             acknowledgeManagerResponsibility: (actorMemberId, request) => (
               managerResponsibilities.acknowledge(actorMemberId, request)
             ),
-            cancelHostTransfer: unsupportedLifecycle,
+            cancelHostTransfer: cancelHostTransferAuthority,
             cancelManagerResponsibilityOffer: (actorMemberId, request) => (
               managerResponsibilities.cancel(actorMemberId, request)
             ),
@@ -340,8 +465,13 @@ describe('LanHostCoordinator production transport', () => {
             createManagerResponsibilityOffer: (actorMemberId, request) => (
               managerResponsibilities.create(actorMemberId, request)
             ),
-            createRetirementCoordinator: () => ({
-              retireProject: unsupportedLifecycle,
+            createRetirementCoordinator: input => ({
+              retireProject: (actorMemberId, request) => (
+                input.projectLifecycleAdmission(
+                  request.projectId,
+                  () => retireProjectAuthority(actorMemberId, request),
+                )
+              ),
             }),
             declineHostTransfer: unsupportedLifecycle,
             declineManagerResponsibility: (actorMemberId, request) => (
@@ -373,7 +503,7 @@ describe('LanHostCoordinator production transport', () => {
             cancelBeforeRelinquishment: jest.fn(),
             close: outgoingHostTransfer.close ?? jest.fn().mockResolvedValue(undefined),
             inspectStartupRecovery: outgoingHostTransfer.inspectStartupRecovery,
-            prepareAccepted: jest.fn(),
+            prepareAccepted: outgoingHostTransfer.prepareAccepted ?? jest.fn(),
             prepareCancellation: outgoingHostTransfer.prepareCancellation ?? jest.fn(),
             prepareTerminalRecoveryBeforeStartup:
               outgoingHostTransfer.prepareTerminalRecoveryBeforeStartup ?? jest.fn(),
@@ -385,15 +515,39 @@ describe('LanHostCoordinator production transport', () => {
         };
       },
       portCandidates: [occupiedPort, 0],
+      setAuthorityTransferExpiryTimeout: (callback, milliseconds) => (
+        authorityTransferTimeoutOverride
+          ? authorityTransferTimeoutOverride(callback, milliseconds)
+          : window.setTimeout(callback, milliseconds)
+      ),
       tlsIdentity: {
         issueServerIdentity: (address: string) => issueServerIdentity(address),
       } as unknown as LanTlsIdentity,
       vaultRoot: root,
     });
     coordinator.bindConnectionProjection({ resetProjectConnection });
+    const admission = (
+      owner: 'host-transfer' | 'retirement',
+    ): CollabProjectLifecycleAuthorityAdmission => async <T>(
+      _projectId: string,
+      operation: () => Promise<T>,
+    ): Promise<T> => {
+      admittedLifecycleOwners.push(owner);
+      const error = owner === 'host-transfer'
+        ? lifecycleAdmissionErrors.hostTransfer
+        : lifecycleAdmissionErrors.retirement;
+      if (error) throw error;
+      return operation();
+    };
+    coordinator.bindProjectLifecycleAdmissions({
+      hostTransfer: admission('host-transfer'),
+      retirement: admission('retirement'),
+    });
   });
 
   afterEach(async () => {
+    await Promise.all([...projectionRegistries].map(registry => registry.close()));
+    projectionRegistries.clear();
     await coordinator.close();
     await authorityDatabase.close();
     await new Promise<void>(resolve => {
@@ -426,6 +580,7 @@ describe('LanHostCoordinator production transport', () => {
       endpoint: host.endpoint,
       projectId: PROJECT_ID,
     });
+    expect(resetProjectConnection).toHaveBeenCalledWith(PROJECT_ID);
     const localMembership = await localProjects.loadMembership(PROJECT_ID);
     if (!localMembership || !isCollabLocalLanMembership(localMembership)) {
       throw new Error('Stored LAN membership missing');
@@ -527,8 +682,8 @@ describe('LanHostCoordinator production transport', () => {
       schemaVersion: COLLAB_LOCAL_PROJECT_SCHEMA_VERSION,
       updatedAt: '2026-08-08T00:00:00.000Z',
     });
-    const hostAccess = membershipAccess(localProjects);
-    const memberAccess = membershipAccess(memberProjects);
+    const hostAccess = await membershipAccess(localProjects);
+    const memberAccess = await membershipAccess(memberProjects);
     const events = new WebSocket(
       `${host.endpoint.replace('https:', 'wss:')}/v9/projects/${PROJECT_ID}/events`,
       {
@@ -573,7 +728,7 @@ describe('LanHostCoordinator production transport', () => {
       projectId: PROJECT_ID,
       targetMemberId: join.joinAttempt.member.id,
     });
-    await memberAccess.service.listMembers(PROJECT_ID);
+    await memberAccess.projection.readSnapshot(PROJECT_ID);
     expect(await localProjects.loadMembership(PROJECT_ID)).toMatchObject({
       member: { role: 'manager' },
     });
@@ -592,7 +747,7 @@ describe('LanHostCoordinator production transport', () => {
       projectId: PROJECT_ID,
       targetMemberId: join.joinAttempt.member.id,
     });
-    await memberAccess.service.listMembers(PROJECT_ID);
+    await memberAccess.projection.readSnapshot(PROJECT_ID);
     expect(await memberProjects.loadMembership(PROJECT_ID)).toMatchObject({
       member: { role: 'member' },
     });
@@ -677,17 +832,181 @@ describe('LanHostCoordinator production transport', () => {
       .rejects.toThrow();
   });
 
+  it('publishes an active data route only while the Project route is live', async () => {
+    const host = await coordinator.startProject(PROJECT_ID);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (!membership || !isCollabLocalLanMembership(membership)) {
+      throw new Error('Stored LAN membership missing');
+    }
+
+    expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toEqual({
+      caCertificatePem: membership.authority.hostCaCertificatePem,
+      caFingerprint: membership.authority.hostCaFingerprint,
+      endpoint: host.endpoint,
+      projectId: PROJECT_ID,
+    });
+
+    resetProjectConnection.mockImplementation(() => {
+      expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toBeNull();
+    });
+    await coordinator.stopProject(PROJECT_ID);
+    expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toBeNull();
+    expect(resetProjectConnection).toHaveBeenCalledWith(PROJECT_ID);
+  });
+
+  it('rejects explicit stop on a foreign installation before changing stop intent', async () => {
+    const before = await localProjects.loadMembership(PROJECT_ID);
+    assertHostInstallationOwned.mockRejectedValueOnce(new CollabError({
+      code: 'authorization-denied',
+      safeContext: { reason: 'host-installation-owner-mismatch' },
+    }));
+
+    await expect(coordinator.stopProject(PROJECT_ID)).rejects.toMatchObject({
+      code: 'authorization-denied',
+      safeContext: { reason: 'host-installation-owner-mismatch' },
+    });
+
+    await expect(localProjects.loadMembership(PROJECT_ID)).resolves.toEqual(before);
+    expect(resetProjectConnection).not.toHaveBeenCalled();
+  });
+
+  it('rejects listener Host acceptance before authority mutation under a competing owner', async () => {
+    const prepareAccepted = jest.fn().mockResolvedValue(undefined);
+    outgoingHostTransfer = {
+      inspectStartupRecovery: jest.fn().mockResolvedValue('none'),
+      prepareAccepted,
+      resume: jest.fn().mockResolvedValue(undefined),
+    };
+    lifecycleAdmissionErrors.hostTransfer = new Error('competing lifecycle owner');
+    const host = await coordinator.startProject(PROJECT_ID);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (
+      !membership
+      || !isCollabLocalLanMembership(membership)
+      || !membership.authority.hostCaCertificatePem
+      || !membership.authority.hostCaFingerprint
+    ) {
+      throw new Error('Stored LAN Host trust missing');
+    }
+    const client = new PinnedCollabHttpClient({
+      caCertificatePem: membership.authority.hostCaCertificatePem,
+      caFingerprint: membership.authority.hostCaFingerprint,
+      endpoint: host.endpoint,
+      projectId: PROJECT_ID,
+    }, 10_000);
+
+    await expect(client.requestWithMember({
+      body: {
+        idempotencyKey: 'accept-listener',
+        projectId: PROJECT_ID,
+        receiverCredential: Buffer.alloc(32, 2).toString('base64url'),
+        targetCaCertificatePem: '-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n',
+        targetCaFingerprint: 'b'.repeat(64),
+        targetEndpoint: 'https://192.168.1.20:54545',
+        transferId: 'transfer-listener',
+      },
+      decode: value => value,
+      idempotencyKey: 'accept-listener',
+      method: 'POST',
+      path: `/v9/projects/${PROJECT_ID}/host-transfers/transfer-listener/accept`,
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({ code: 'operation-failed' });
+
+    expect(admittedLifecycleOwners).toContain('host-transfer');
+    expect(acceptHostTransferAuthority).not.toHaveBeenCalled();
+    expect(prepareAccepted).not.toHaveBeenCalled();
+  });
+
+  it('rejects listener Host cancellation before recovery mutation under a competing owner', async () => {
+    const prepareCancellation = jest.fn().mockResolvedValue(undefined);
+    outgoingHostTransfer = {
+      inspectStartupRecovery: jest.fn().mockResolvedValue('none'),
+      prepareCancellation,
+      resume: jest.fn().mockResolvedValue(undefined),
+    };
+    lifecycleAdmissionErrors.hostTransfer = new Error('competing lifecycle owner');
+    const host = await coordinator.startProject(PROJECT_ID);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (
+      !membership
+      || !isCollabLocalLanMembership(membership)
+      || !membership.authority.hostCaCertificatePem
+      || !membership.authority.hostCaFingerprint
+    ) {
+      throw new Error('Stored LAN Host trust missing');
+    }
+    const client = new PinnedCollabHttpClient({
+      caCertificatePem: membership.authority.hostCaCertificatePem,
+      caFingerprint: membership.authority.hostCaFingerprint,
+      endpoint: host.endpoint,
+      projectId: PROJECT_ID,
+    }, 10_000);
+
+    await expect(client.requestWithMember({
+      body: {
+        expectedHostMemberId: 'member-host',
+        idempotencyKey: 'cancel-listener',
+        projectId: PROJECT_ID,
+        transferId: 'transfer-listener',
+      },
+      decode: value => value,
+      idempotencyKey: 'cancel-listener',
+      method: 'DELETE',
+      path: `/v9/projects/${PROJECT_ID}/host-transfers/transfer-listener`,
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({ code: 'operation-failed' });
+
+    expect(admittedLifecycleOwners).toContain('host-transfer');
+    expect(prepareCancellation).not.toHaveBeenCalled();
+    expect(cancelHostTransferAuthority).not.toHaveBeenCalled();
+  });
+
+  it('rejects listener Retire before quiescing under a competing owner', async () => {
+    lifecycleAdmissionErrors.retirement = new Error('competing lifecycle owner');
+    const host = await coordinator.startProject(PROJECT_ID);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (
+      !membership
+      || !isCollabLocalLanMembership(membership)
+      || !membership.authority.hostCaCertificatePem
+      || !membership.authority.hostCaFingerprint
+    ) {
+      throw new Error('Stored LAN Host trust missing');
+    }
+    const client = new PinnedCollabHttpClient({
+      caCertificatePem: membership.authority.hostCaCertificatePem,
+      caFingerprint: membership.authority.hostCaFingerprint,
+      endpoint: host.endpoint,
+      projectId: PROJECT_ID,
+    }, 10_000);
+
+    await expect(client.requestWithMember({
+      body: {
+        expectedHostMemberId: 'member-host',
+        idempotencyKey: 'retire-listener',
+        managerActorMemberId: 'member-host',
+        projectId: PROJECT_ID,
+      },
+      decode: value => value,
+      idempotencyKey: 'retire-listener',
+      method: 'POST',
+      path: `/v9/projects/${PROJECT_ID}/retire`,
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({ code: 'operation-failed' });
+
+    expect(admittedLifecycleOwners).toContain('retirement');
+    expect(retireProjectAuthority).not.toHaveBeenCalled();
+    expect(coordinator.isProjectRunning(PROJECT_ID)).toBe(true);
+  });
+
   it('rejects Cloud membership before opening LAN authority state', async () => {
     const existing = await localProjects.loadMembership(PROJECT_ID);
     if (!existing) throw new Error('Missing membership fixture');
     await localProjects.saveMembership({
       authority: {
-        bindingVersion: 1,
+        bindingVersion: 2,
         developmentActorId: existing.member.id,
-        gitRemoteUrl: `http://127.0.0.1:8787/v1/projects/${PROJECT_ID}/repository.git`,
+        gitRemoteUrl: `http://127.0.0.1:8787/v2/projects/${PROJECT_ID}/repository.git`,
         kind: 'cloud',
         serverUrl: 'http://127.0.0.1:8787/',
-        wireVersion: 4,
+        wireVersion: 6,
       },
       createdAt: existing.createdAt,
       lastEventSequence: existing.lastEventSequence,
@@ -711,6 +1030,10 @@ describe('LanHostCoordinator production transport', () => {
 
   it('quiesces and closes one old-Host route without reopening after cutover', async () => {
     await coordinator.startProject(PROJECT_ID);
+    resetProjectConnection.mockClear();
+    resetProjectConnection.mockImplementation(() => {
+      expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toBeNull();
+    });
 
     await coordinator.quiesceProjectForHostTransfer(PROJECT_ID);
     await coordinator.reopenProjectBeforeHostTransfer(PROJECT_ID);
@@ -719,6 +1042,7 @@ describe('LanHostCoordinator production transport', () => {
     await coordinator.closeProjectForHostTransfer(PROJECT_ID);
 
     expect(coordinator.isProjectRunning(PROJECT_ID)).toBe(false);
+    expect(resetProjectConnection).toHaveBeenCalledWith(PROJECT_ID);
     await expect(coordinator.reopenProjectBeforeHostTransfer(PROJECT_ID))
       .rejects.toMatchObject({ code: 'project-not-found' });
     await expect(coordinator.completeProjectHostTransfer(PROJECT_ID)).resolves.toBeUndefined();
@@ -1007,6 +1331,549 @@ describe('LanHostCoordinator production transport', () => {
     expect(cancel).toHaveBeenCalledWith(PROJECT_ID, 'transfer-provisional');
   });
 
+  it('holds an unadvertised listener while a Cloud-to-LAN target is prepared', async () => {
+    const preparation = await coordinator.prepareAuthorityTransferTarget();
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: preparation.caCertificatePem,
+      caFingerprint: preparation.caFingerprint,
+      endpoint: preparation.endpoint,
+      projectId: PROJECT_ID,
+    }, { timeoutMs: 100 });
+
+    expect(advertiseProject).not.toHaveBeenCalled();
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: 'transfer-prepared-target',
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({
+      safeContext: { reason: 'authority-transfer-authentication-failed' },
+    });
+
+    await preparation.dispose();
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: 'transfer-prepared-target',
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({ code: 'endpoint-unreachable' });
+  });
+
+  it('replaces ordinary authority-transfer routes with a restart-safe terminal responder', async () => {
+    const running = await coordinator.startProject(PROJECT_ID);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (!membership || !isCollabLocalLanMembership(membership)) {
+      throw new Error('Missing LAN membership');
+    }
+    const authenticateMemberCredential = jest.fn(async (credential: string) => {
+      if (credential !== HOST_CREDENTIAL) throw new Error('Invalid credential');
+      return { memberId: 'member-host' as const };
+    });
+    const proposed = authorityTransferStatus('collecting-readiness');
+    const sourceRegistration = {
+      hostMemberId: 'member-host',
+      projectId: PROJECT_ID,
+      service: {
+        acceptLanToCloudTransferTarget: jest.fn(async () => proposed),
+        authenticateMemberCredential,
+        cancelProjectAuthorityTransfer: jest.fn(async () => proposed),
+        getProjectAuthorityTransfer: jest.fn(async () => proposed),
+        requestLanToCloudTransfer: jest.fn(async () => proposed),
+      },
+      state: 'source-active' as const,
+    };
+    await coordinator.startAuthorityTransferRoute(sourceRegistration);
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: membership.authority.hostCaCertificatePem!,
+      caFingerprint: membership.authority.hostCaFingerprint!,
+      endpoint: running.endpoint,
+      projectId: PROJECT_ID,
+    });
+
+    await expect(client.requestWithMember('requestLanToCloudTransfer', {
+      expectedAuthorityGeneration: 1,
+      idempotencyKey: 'intent-listener-transfer',
+      projectId: PROJECT_ID,
+      targetUrl: 'https://cloud.example.test',
+    }, HOST_CREDENTIAL)).resolves.toEqual(proposed);
+
+    const relinquished = authorityTransferStatus('source-relinquished');
+    const terminalStatus = jest.fn(async () => relinquished);
+    const terminalRegistration = {
+      projectId: PROJECT_ID,
+      service: {
+        acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+        authenticateMemberCredential,
+        expire: jest.fn(),
+        expiresAt: relinquished.expiresAt,
+        getProjectAuthorityTransfer: terminalStatus,
+        getTransferredMembershipClaim: jest.fn(),
+      },
+      state: 'terminal-source' as const,
+      transferId: relinquished.transferId,
+    };
+    await expect(coordinator.startAuthorityTransferRoute(
+      terminalRegistration,
+    )).rejects.toMatchObject({
+      safeContext: { reason: 'authority-transfer-route-conflict' },
+    });
+    await coordinator.transitionAuthorityTransferRoute({
+      expected: sourceRegistration,
+      next: terminalRegistration,
+      relinquishmentProof: relinquished.relinquishmentProof!,
+    });
+    await coordinator.quiesceProjectForHostTransfer(PROJECT_ID);
+    await coordinator.closeProjectForHostTransfer(PROJECT_ID);
+    expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toBeNull();
+
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: 'transfer-listener',
+    }, HOST_CREDENTIAL)).resolves.toEqual(relinquished);
+    expect(terminalStatus).toHaveBeenCalledTimes(1);
+    await expect(client.requestWithMember('requestLanToCloudTransfer', {
+      expectedAuthorityGeneration: 1,
+      idempotencyKey: 'intent-after-relinquishment',
+      projectId: PROJECT_ID,
+      targetUrl: 'https://cloud.example.test',
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({
+      safeContext: { reason: 'authority-transfer-route-not-found' },
+    });
+  });
+
+  it('expires a terminal authority-transfer route and releases its listener', async () => {
+    const expire = jest.fn(async () => undefined);
+    const terminal = authorityTransferStatus('source-relinquished');
+    const session = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: {
+        acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+        authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+        expire,
+        expiresAt: new Date(Date.now() - 1).toISOString(),
+        getProjectAuthorityTransfer: jest.fn(async () => terminal),
+        getTransferredMembershipClaim: jest.fn(),
+      },
+      state: 'terminal-source',
+      transferId: terminal.transferId,
+    });
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: session.caCertificatePem,
+      caFingerprint: session.caFingerprint,
+      endpoint: session.endpoint,
+      projectId: PROJECT_ID,
+    }, { timeoutMs: 100 });
+
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+
+    expect(expire).toHaveBeenCalledTimes(1);
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: 'transfer-listener',
+    }, HOST_CREDENTIAL)).rejects.toMatchObject({ code: 'endpoint-unreachable' });
+  });
+
+  it('reuses a restored terminal route for the same durable transfer', async () => {
+    const terminal = authorityTransferStatus('source-relinquished');
+    const service = () => ({
+      acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+      authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+      expire: jest.fn(async () => undefined),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      getProjectAuthorityTransfer: jest.fn(async () => terminal),
+      getTransferredMembershipClaim: jest.fn(),
+    });
+    const first = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: service(),
+      state: 'terminal-source',
+      transferId: terminal.transferId,
+    });
+
+    const repeated = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: service(),
+      state: 'terminal-source',
+      transferId: terminal.transferId,
+    });
+
+    expect(repeated).toEqual(first);
+  });
+
+  it('reuses a restored target-active route for the same durable transfer', async () => {
+    const service = () => ({
+      claimTransferredMembership: jest.fn(),
+      expire: jest.fn(async () => undefined),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const first = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: service(),
+      state: 'target-active',
+      transferId: 'transfer-target-retry',
+    });
+
+    const repeated = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: service(),
+      state: 'target-active',
+      transferId: 'transfer-target-retry',
+    });
+
+    expect(repeated).toEqual(first);
+  });
+
+  it('expires a target-active claim route and releases its listener', async () => {
+    const expire = jest.fn(async () => undefined);
+    const session = await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: {
+        claimTransferredMembership: jest.fn(),
+        expire,
+        expiresAt: new Date(Date.now() - 1).toISOString(),
+      },
+      state: 'target-active',
+      transferId: 'transfer-target-expiry',
+    });
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: session.caCertificatePem,
+      caFingerprint: session.caFingerprint,
+      endpoint: session.endpoint,
+      projectId: PROJECT_ID,
+    }, { timeoutMs: 100 });
+
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+
+    expect(expire).toHaveBeenCalledTimes(1);
+    await expect(client.claimTransferredMembership({
+      claim: Buffer.alloc(32, 6).toString('base64url'),
+      credentialHash: 'c'.repeat(64),
+      idempotencyKey: 'intent-expired-target',
+      projectId: PROJECT_ID,
+      transferId: 'transfer-target-expiry',
+    })).rejects.toMatchObject({ code: 'endpoint-unreachable' });
+  });
+
+  it('keeps a terminal authority-transfer route through a chunked long expiry timer', async () => {
+    const startedAt = new Date('2026-08-27T00:00:00.000Z');
+    const expiresAt = new Date(startedAt.getTime() + 30 * 24 * 60 * 60 * 1_000);
+    const expire = jest.fn(async () => undefined);
+    const callbacks: Array<() => void> = [];
+    const delays: number[] = [];
+    authorityTransferNow = startedAt;
+    authorityTransferTimeoutOverride = (callback, milliseconds) => {
+      callbacks.push(callback);
+      delays.push(milliseconds);
+      return 9_000 + callbacks.length;
+    };
+    await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: {
+        acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+        authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+        expire,
+        expiresAt: expiresAt.toISOString(),
+        getProjectAuthorityTransfer: jest.fn(async () => (
+          authorityTransferStatus('source-relinquished')
+        )),
+        getTransferredMembershipClaim: jest.fn(),
+      },
+      state: 'terminal-source',
+      transferId: 'transfer-listener',
+    });
+
+    expect(delays).toEqual([2_147_483_647]);
+    authorityTransferNow = new Date(startedAt.getTime() + 2_147_483_647);
+    callbacks[0]?.();
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+    expect(expire).not.toHaveBeenCalled();
+    expect(delays).toEqual([
+      2_147_483_647,
+      expiresAt.getTime() - authorityTransferNow.getTime(),
+    ]);
+
+    authorityTransferNow = expiresAt;
+    callbacks[1]?.();
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+    expect(expire).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps terminal expiry scheduled after a stale state-specific stop', async () => {
+    const startedAt = new Date('2026-08-27T00:00:00.000Z');
+    const expiresAt = new Date(startedAt.getTime() + 1_000);
+    const callbacks: Array<() => void> = [];
+    const expire = jest.fn(async () => undefined);
+    authorityTransferNow = startedAt;
+    authorityTransferTimeoutOverride = callback => {
+      callbacks.push(callback);
+      return 10_000 + callbacks.length;
+    };
+    await coordinator.startAuthorityTransferRoute({
+      projectId: PROJECT_ID,
+      service: {
+        acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+        authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+        expire,
+        expiresAt: expiresAt.toISOString(),
+        getProjectAuthorityTransfer: jest.fn(async () => (
+          authorityTransferStatus('source-relinquished')
+        )),
+        getTransferredMembershipClaim: jest.fn(),
+      },
+      state: 'terminal-source',
+      transferId: 'transfer-listener',
+    });
+
+    await coordinator.stopAuthorityTransferRoute(PROJECT_ID, 'source-active');
+    authorityTransferNow = expiresAt;
+    callbacks[0]?.();
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+
+    expect(expire).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebinds an authority-transfer-only listener without replacing its route', async () => {
+    const nextAddress = listPrivateIpv4Addresses()[0];
+    if (!nextAddress) return;
+    const status = authorityTransferStatus('collecting-readiness');
+    const registration = {
+      hostMemberId: 'member-host',
+      projectId: PROJECT_ID,
+      service: {
+        acceptLanToCloudTransferTarget: jest.fn(async () => status),
+        authenticateMemberCredential: jest.fn(async () => ({
+          memberId: 'member-host' as const,
+        })),
+        cancelProjectAuthorityTransfer: jest.fn(async () => status),
+        getProjectAuthorityTransfer: jest.fn(async () => status),
+        requestLanToCloudTransfer: jest.fn(async () => status),
+      },
+      state: 'source-active' as const,
+      };
+      const first = await coordinator.startAuthorityTransferRoute(registration);
+      expect(coordinator.getActiveProjectRoute(PROJECT_ID)).toBeNull();
+
+      privateAddresses = [nextAddress];
+    await checkHostAddress();
+    const repeated = await coordinator.startAuthorityTransferRoute(registration);
+
+    expect(createAddressMonitor).toHaveBeenCalledTimes(1);
+    expect(repeated.endpoint).not.toBe(first.endpoint);
+    expect(new URL(repeated.endpoint).hostname).toBe(nextAddress);
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: repeated.caCertificatePem,
+      caFingerprint: repeated.caFingerprint,
+      endpoint: repeated.endpoint,
+      projectId: PROJECT_ID,
+    });
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: status.transferId,
+    }, HOST_CREDENTIAL)).resolves.toEqual(status);
+    await coordinator.stopAuthorityTransferRoute(PROJECT_ID, 'source-active');
+    expect(addressMonitorClose).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
+  it('preserves a source-active transfer route while its hosted listener rebinds', async () => {
+    const nextAddress = listPrivateIpv4Addresses()[0];
+    if (!nextAddress) return;
+    await coordinator.startProject(PROJECT_ID);
+    const status = authorityTransferStatus('collecting-readiness');
+    const registration = {
+      hostMemberId: 'member-host',
+      projectId: PROJECT_ID,
+      service: {
+        acceptLanToCloudTransferTarget: jest.fn(async () => status),
+        authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+        cancelProjectAuthorityTransfer: jest.fn(async () => status),
+        getProjectAuthorityTransfer: jest.fn(async () => status),
+        requestLanToCloudTransfer: jest.fn(async () => status),
+      },
+      state: 'source-active' as const,
+    };
+    await coordinator.startAuthorityTransferRoute(registration);
+    privateAddresses = [nextAddress];
+
+    await expect(checkHostAddress()).resolves.toBeUndefined();
+    const repeated = await coordinator.startAuthorityTransferRoute(registration);
+    const membership = await localProjects.loadMembership(PROJECT_ID);
+    if (!membership || !isCollabLocalLanMembership(membership)) {
+      throw new Error('Missing LAN membership');
+    }
+
+    const client = new LanAuthorityTransferClient({
+      caCertificatePem: membership.authority.hostCaCertificatePem!,
+      caFingerprint: membership.authority.hostCaFingerprint!,
+      endpoint: repeated.endpoint,
+      projectId: PROJECT_ID,
+    });
+    await expect(client.requestWithMember('getProjectAuthorityTransfer', {
+      projectId: PROJECT_ID,
+      transferId: status.transferId,
+    }, HOST_CREDENTIAL)).resolves.toEqual(status);
+    expect(new URL(repeated.endpoint).hostname).toBe(nextAddress);
+    expect(coordinator.getProjectState(PROJECT_ID).status).toBe('running');
+  }, 30_000);
+
+  it('pins an accepted source-active route until cancellation releases it', async () => {
+    const nextAddress = listPrivateIpv4Addresses()[0];
+    if (!nextAddress) return;
+    const transferStatus = authorityTransferStatus('collecting-readiness');
+    await coordinator.startAuthorityTransferRoute({
+      hostMemberId: 'member-host',
+      projectId: PROJECT_ID,
+      service: {
+        acceptLanToCloudTransferTarget: jest.fn(async () => transferStatus),
+        authenticateMemberCredential: jest.fn(async () => ({ memberId: 'member-host' as const })),
+        cancelProjectAuthorityTransfer: jest.fn(async () => transferStatus),
+        getProjectAuthorityTransfer: jest.fn(async () => transferStatus),
+        requestLanToCloudTransfer: jest.fn(async () => transferStatus),
+      },
+      state: 'source-active',
+    });
+    const expectedEndpoint = await coordinator.pinAuthorityTransferSourceEndpoint(PROJECT_ID);
+    privateAddresses = [nextAddress];
+
+    await expect(checkHostAddress()).rejects.toMatchObject({
+      safeContext: { reason: 'authority-transfer-endpoint-pinned' },
+    });
+    await coordinator.unpinAuthorityTransferSourceEndpoint(PROJECT_ID, expectedEndpoint);
+    await expect(checkHostAddress()).resolves.toBeUndefined();
+  }, 30_000);
+
+  it.each(['target-only-staged', 'target-active'] as const)(
+    'keeps the signed Cloud-to-LAN endpoint pinned while the route is %s',
+    async (state) => {
+      const nextAddress = listPrivateIpv4Addresses()[0];
+      if (!nextAddress) return;
+      const status = authorityTransferStatus('collecting-readiness');
+      const registration = state === 'target-only-staged'
+        ? {
+            credentialHash: 'a'.repeat(64),
+            projectId: PROJECT_ID,
+            service: {
+              acceptCloudToLanTransferTarget: jest.fn(async () => status),
+              confirmCloudToLanTargetActive: jest.fn(async () => status),
+              getProjectAuthorityTransfer: jest.fn(async () => status),
+              reportCloudToLanTargetStaged: jest.fn() as never,
+            },
+            state,
+            transferId: status.transferId,
+          }
+        : {
+            projectId: PROJECT_ID,
+            service: {
+              claimTransferredMembership: jest.fn(),
+              expire: jest.fn(async () => undefined),
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+            state,
+            transferId: status.transferId,
+          };
+      const first = await coordinator.startAuthorityTransferRoute(registration);
+
+      privateAddresses = [nextAddress];
+      await expect(checkHostAddress()).rejects.toMatchObject({
+        safeContext: { reason: 'authority-transfer-endpoint-pinned' },
+      });
+      const repeated = await coordinator.startAuthorityTransferRoute(registration);
+
+      expect(repeated.endpoint).toBe(first.endpoint);
+    },
+    30_000,
+  );
+
+  it.each(['target-only-staged', 'target-active', 'terminal-source'] as const)(
+    'fails closed instead of moving a reconstructed %s route to a fallback port',
+    async (state) => {
+      const preparation = await coordinator.prepareAuthorityTransferTarget();
+      const expectedEndpoint = preparation.endpoint;
+      await preparation.dispose();
+      const expectedUrl = new URL(expectedEndpoint);
+      const pinnedPortBlocker = createServer();
+      await new Promise<void>((resolve, reject) => {
+        pinnedPortBlocker.once('error', reject);
+        pinnedPortBlocker.listen(Number(expectedUrl.port), expectedUrl.hostname, resolve);
+      });
+      const transferStatus = authorityTransferStatus('source-relinquished');
+      const registration = state === 'target-only-staged'
+        ? {
+            credentialHash: 'a'.repeat(64),
+            expectedEndpoint,
+            projectId: PROJECT_ID,
+            service: {
+              acceptCloudToLanTransferTarget: jest.fn(async () => transferStatus),
+              confirmCloudToLanTargetActive: jest.fn(async () => transferStatus),
+              getProjectAuthorityTransfer: jest.fn(async () => transferStatus),
+              reportCloudToLanTargetStaged: jest.fn() as never,
+            },
+            state,
+            transferId: transferStatus.transferId,
+          }
+        : state === 'target-active'
+          ? {
+              expectedEndpoint,
+              projectId: PROJECT_ID,
+              service: {
+                claimTransferredMembership: jest.fn(),
+                expire: jest.fn(async () => undefined),
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+              },
+              state,
+              transferId: transferStatus.transferId,
+            }
+          : {
+              expectedEndpoint,
+              projectId: PROJECT_ID,
+              service: {
+                acknowledgeTransferredMembershipClaimRedemption: jest.fn(),
+                authenticateMemberCredential: jest.fn(async () => ({
+                  memberId: 'member-host' as const,
+                })),
+                expire: jest.fn(async () => undefined),
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                getProjectAuthorityTransfer: jest.fn(async () => transferStatus),
+                getTransferredMembershipClaim: jest.fn(),
+              },
+              state,
+              transferId: transferStatus.transferId,
+            };
+
+      await expect(coordinator.startAuthorityTransferRoute(registration)).rejects.toMatchObject({
+        safeContext: { reason: 'authority-transfer-expected-endpoint-unavailable' },
+      });
+      await new Promise<void>(resolve => {
+        pinnedPortBlocker.close(() => resolve());
+        pinnedPortBlocker.closeAllConnections();
+      });
+      await expect(coordinator.startAuthorityTransferRoute(registration)).resolves.toMatchObject({
+        endpoint: expectedEndpoint,
+      });
+    },
+    30_000,
+  );
+
+  it('retries Cloud-to-LAN recovery preparation on the exact durable endpoint', async () => {
+    const initial = await coordinator.prepareAuthorityTransferTarget();
+    const expectedEndpoint = initial.endpoint;
+    await initial.dispose();
+    const expectedUrl = new URL(expectedEndpoint);
+    const pinnedPortBlocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      pinnedPortBlocker.once('error', reject);
+      pinnedPortBlocker.listen(Number(expectedUrl.port), expectedUrl.hostname, resolve);
+    });
+
+    await expect(
+      coordinator.prepareAuthorityTransferTarget(expectedEndpoint),
+    ).rejects.toMatchObject({
+      safeContext: { reason: 'authority-transfer-expected-endpoint-unavailable' },
+    });
+    await new Promise<void>(resolve => {
+      pinnedPortBlocker.close(() => resolve());
+      pinnedPortBlocker.closeAllConnections();
+    });
+    const recovered = await coordinator.prepareAuthorityTransferTarget(expectedEndpoint);
+    expect(recovered.endpoint).toBe(expectedEndpoint);
+    await recovered.dispose();
+  }, 30_000);
+
   it('traverses bounded activity pages larger than one LAN response', async () => {
     await coordinator.startProject(PROJECT_ID);
     const control = new LocalProjectControlPort(localProjects);
@@ -1134,7 +2001,7 @@ describe('LanHostCoordinator production transport', () => {
   it('reads a maximal-body Ticket detail through the real Host and client', async () => {
     await coordinator.startProject(PROJECT_ID);
     const control = new LocalProjectControlPort(localProjects);
-    const projection = new CollabClientProjection(localProjects, control);
+    const projection = new CollabClientProjection(localProjects, control, projectionOptions());
     await projection.readSnapshot(PROJECT_ID);
 
     // Quotes maximize escaping for this body while remaining valid Markdown;
@@ -1166,6 +2033,7 @@ describe('LanHostCoordinator production transport', () => {
     await coordinator.startProject(PROJECT_ID);
     const control = new LocalProjectControlPort(localProjects);
     const projection = new CollabClientProjection(localProjects, control, {
+      ...projectionOptions(),
       now: () => new Date('2026-08-08T00:10:00.000Z'),
     });
     await projection.readSnapshot(PROJECT_ID);
@@ -1323,7 +2191,7 @@ describe('LanHostCoordinator production transport', () => {
     await expect(localProjects.loadMembership(PROJECT_ID)).resolves.toMatchObject({
       authority: { endpoint: first.endpoint },
     });
-    await expect(access(path.join(root, '.claudian', 'collab', 'lan-host.lock')))
+    await expect(access(hostLockPath(root)))
       .rejects.toMatchObject({ code: 'ENOENT' });
   }, 30_000);
 
@@ -1365,7 +2233,7 @@ describe('LanHostCoordinator production transport', () => {
     await expect(localProjects.loadMembership(PROJECT_ID)).resolves.toMatchObject({
       authority: { endpoint: first.endpoint },
     });
-    await expect(access(path.join(root, '.claudian', 'collab', 'lan-host.lock')))
+    await expect(access(hostLockPath(root)))
       .rejects.toMatchObject({ code: 'ENOENT' });
   }, 30_000);
 
@@ -1400,7 +2268,7 @@ describe('LanHostCoordinator production transport', () => {
     expect(internals.hostLock).toBeNull();
     expect(internals.terminalProjects.size).toBe(0);
     expect(advertiseProject).not.toHaveBeenCalled();
-    await expect(access(path.join(root, '.claudian', 'collab', 'lan-host.lock')))
+    await expect(access(hostLockPath(root)))
       .rejects.toMatchObject({ code: 'ENOENT' });
   }, 30_000);
 
@@ -1442,7 +2310,7 @@ describe('LanHostCoordinator production transport', () => {
     expect(internals.hostLock).toBeNull();
     expect(internals.provisionalTransfers.size).toBe(0);
     expect(advertiseProject).not.toHaveBeenCalled();
-    await expect(access(path.join(root, '.claudian', 'collab', 'lan-host.lock')))
+    await expect(access(hostLockPath(root)))
       .rejects.toMatchObject({ code: 'ENOENT' });
   }, 30_000);
 
@@ -1585,6 +2453,10 @@ describe('LanHostCoordinator production transport', () => {
           },
         } as never),
       }, {
+        authorityProjectionTransitions: new LanAuthorityProjectionTransitionCoordinator(),
+        hostInstallation: {
+          inspect: async () => 'absent',
+        },
         invitationCodec: codec,
         vaultRoot: memberRoot,
       });
@@ -1630,6 +2502,9 @@ describe('LanHostCoordinator production transport', () => {
     await coordinator.startProject(PROJECT_ID);
     const secondOpen = jest.fn();
     const second = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => undefined,
+      commitHostedRoute: (_expected, next) => localProjects.saveMembership(next),
+      installationKey: INSTALLATION_A,
       createGitProxy,
       createInvitationCodec: () => new InvitationCodec({
         isAddressAllowed: addressValue => addressValue === '127.0.0.1',
@@ -1650,7 +2525,15 @@ describe('LanHostCoordinator production transport', () => {
 
   it('reclaims an orphaned Host lock left by an earlier renderer context', async () => {
     await localProjects.ensurePrivateStateContainer();
-    const lockPath = path.join(root, '.claudian', 'collab', 'lan-host.lock');
+    const lockPath = path.join(
+      root,
+      '.claudian',
+      'collab',
+      'installations',
+      INSTALLATION_A,
+      'lan-host.lock',
+    );
+    await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(lockPath, JSON.stringify({
       nonce: 'orphaned-renderer-lock',
       pid: process.pid,
@@ -1661,6 +2544,29 @@ describe('LanHostCoordinator production transport', () => {
       status: 'running',
     });
     expect(await readFile(lockPath, 'utf8')).not.toContain('orphaned-renderer-lock');
+  });
+
+  it('never reads or reclaims a copied same-PID lock from another installation', async () => {
+    const foreignLockPath = path.join(
+      root,
+      '.claudian',
+      'collab',
+      'installations',
+      INSTALLATION_B,
+      'lan-host.lock',
+    );
+    const foreignLock = `${JSON.stringify({
+      nonce: 'copied-foreign-renderer-lock',
+      pid: process.pid,
+    })}\n`;
+    await mkdir(path.dirname(foreignLockPath), { recursive: true });
+    await writeFile(foreignLockPath, foreignLock, { mode: 0o600 });
+
+    await expect(coordinator.startProject(PROJECT_ID)).resolves.toMatchObject({
+      projectId: PROJECT_ID,
+      status: 'running',
+    });
+    await expect(readFile(foreignLockPath, 'utf8')).resolves.toBe(foreignLock);
   });
 
   it('multiplexes only explicitly started Projects on one listener', async () => {
@@ -1691,7 +2597,9 @@ describe('LanHostCoordinator production transport', () => {
       schemaVersion: COLLAB_LOCAL_PROJECT_SCHEMA_VERSION,
       updatedAt: '2026-08-08T00:00:00.000Z',
     });
-    const betaDirectory = await localProjects.ensureAuthorityDirectory(betaId);
+    const betaDirectory = (
+      await localProjects.createOwnedAuthorityDirectory(betaId)
+    ).authorityDirectory;
     const betaDatabase = new SqlJsProjectDatabase(betaDirectory, {
       loadSqlJs: async () => SQL,
     });
@@ -1710,6 +2618,9 @@ describe('LanHostCoordinator production transport', () => {
 
     await coordinator.close();
     coordinator = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => undefined,
+      commitHostedRoute: (_expected, next) => localProjects.saveMembership(next),
+      installationKey: INSTALLATION_A,
       createGitProxy,
       createInvitationCodec: () => new InvitationCodec({
         isAddressAllowed: addressValue => addressValue === '127.0.0.1',
@@ -1833,8 +2744,13 @@ describe('LanHostCoordinator production transport', () => {
       oldEndpointBlocker.once('error', reject);
       oldEndpointBlocker.listen(oldPort, '127.0.0.1', resolve);
     });
-    const authorityDirectory = await localProjects.ensureAuthorityDirectory(PROJECT_ID);
+    const authorityDirectory = (
+      await localProjects.createOwnedAuthorityDirectory(PROJECT_ID)
+    ).authorityDirectory;
     coordinator = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => undefined,
+      commitHostedRoute: (_expected, next) => localProjects.saveMembership(next),
+      installationKey: INSTALLATION_A,
       createGitProxy,
       createInvitationCodec: () => new InvitationCodec({
         isAddressAllowed: addressValue => addressValue === '127.0.0.1',
@@ -1888,7 +2804,8 @@ describe('LanHostCoordinator production transport', () => {
 
   it('reclaims a stale Vault Host lock without touching durable Project state', async () => {
     await localProjects.ensurePrivateStateContainer();
-    const lockPath = path.join(root, '.claudian', 'collab', 'lan-host.lock');
+    const lockPath = hostLockPath(root);
+    await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(lockPath, JSON.stringify({
       nonce: 'stale-lock',
       pid: 2_000_000_000,
@@ -1911,10 +2828,17 @@ describe('LanHostCoordinator lazy construction', () => {
   it('applies the durable Project start guard before every Host recovery path', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'claudian-lan-host-guard-'));
     const openProject = jest.fn();
+    const admissionOrder: string[] = [];
     const runWithProjectStartGuard = jest.fn(async () => {
+      admissionOrder.push('durable-guard');
       throw new Error('durable Cloud fence');
     });
     const coordinator = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => {
+        admissionOrder.push('installation-binding');
+      },
+      commitHostedRoute: async () => undefined,
+      installationKey: INSTALLATION_A,
       localProjects: {
         ensurePrivateStateContainer: jest.fn(),
         hostTransferRecovery: { load: jest.fn() },
@@ -1928,6 +2852,7 @@ describe('LanHostCoordinator lazy construction', () => {
 
     await expect(coordinator.startProject(PROJECT_ID)).rejects.toThrow('durable Cloud fence');
     expect(runWithProjectStartGuard).toHaveBeenCalledWith(PROJECT_ID, expect.any(Function));
+    expect(admissionOrder).toEqual(['installation-binding', 'durable-guard']);
     expect(openProject).not.toHaveBeenCalled();
     await coordinator.close();
     await rm(root, { force: true, recursive: true });
@@ -1937,6 +2862,7 @@ describe('LanHostCoordinator lazy construction', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'claudian-lan-host-incoming-'));
     const openProject = jest.fn();
     const recovery = createHostTransferRecoveryRecord({
+      ownerInstallationKey: "device-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       createdAt: '2026-08-13T00:00:00.000Z',
       direction: 'incoming',
       projectId: PROJECT_ID,
@@ -1950,6 +2876,9 @@ describe('LanHostCoordinator lazy construction', () => {
       transferId: 'transfer-incoming',
     });
     const coordinator = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => undefined,
+      commitHostedRoute: async () => undefined,
+      installationKey: INSTALLATION_A,
       localProjects: {
         ensurePrivateStateContainer: jest.fn(),
         hostTransferRecovery: {
@@ -1976,6 +2905,9 @@ describe('LanHostCoordinator lazy construction', () => {
   it('does not create private state or start network work in its constructor', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'claudian-lan-host-lazy-'));
     const coordinator = new LanHostCoordinator({
+      assertHostInstallationOwned: async () => undefined,
+      commitHostedRoute: async () => undefined,
+      installationKey: INSTALLATION_A,
       getPrivateIpv4Addresses: () => {
         throw new Error('Network selection must stay lazy');
       },

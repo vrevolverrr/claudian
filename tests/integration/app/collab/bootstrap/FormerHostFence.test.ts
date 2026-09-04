@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { DevelopmentBootstrapAttemptStatus } from '@claudian-collab/protocol';
+import {
+  TEST_INSTALLATION_A,
+  TEST_INSTALLATION_B,
+} from '@test/helpers/installations';
 
 import {
   CloudBootstrapCoordinator,
@@ -12,13 +16,16 @@ import {
   CloudBootstrapReadinessCollector,
   type CloudBootstrapReadinessObservation,
 } from '@/app/collab/bootstrap/CloudBootstrapReadiness';
+import { CloudBootstrapService } from '@/app/collab/bootstrap/CloudBootstrapService';
 import {
   createCloudBootstrapTransitionRecord,
+  decodeCloudBootstrapTransitionRecord,
   developmentBootstrapManifestSha256,
   markCloudBootstrapTerminalCleanupCompleted,
   observeCloudBootstrapAttemptStatus,
 } from '@/app/collab/bootstrap/CloudBootstrapTransitionRecord';
 import { CloudBootstrapTransitionStore } from '@/app/collab/bootstrap/CloudBootstrapTransitionStore';
+import { CollabProjectLifecycleSubsystem } from '@/app/collab/lifecycle/CollabProjectLifecycleSubsystem';
 
 import {
   ATTEMPT_ID,
@@ -131,7 +138,7 @@ describe('Former Host Cloud bootstrap fence', () => {
   });
 
   it('keeps LAN stopped while completing local binding after a lost activation response', async () => {
-    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot);
+    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
     const hostStatePath = path.join(vaultRoot, '.claudian', 'collab', 'host-state.json');
     await writeFile(hostStatePath, JSON.stringify({
       activeChildren: 1,
@@ -171,6 +178,7 @@ describe('Former Host Cloud bootstrap fence', () => {
           projectId: PROJECT_ID,
         }),
       },
+      installationKey: TEST_INSTALLATION_A,
       now: () => new Date('2026-08-21T00:00:03.000Z'),
       readiness: new CloudBootstrapReadinessCollector({
         inspect: async () => readyObservation(),
@@ -264,8 +272,9 @@ describe('Former Host Cloud bootstrap fence', () => {
   });
 
   it('isolates a corrupt Project transition while preserving other recovery candidates', async () => {
-    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot);
+    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
     const valid = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
       developmentActorId: HOST_MEMBER_ID,
       fenceId: 'bootstrap-fence-one',
       manifest: bootstrapManifest(),
@@ -295,6 +304,49 @@ describe('Former Host Cloud bootstrap fence', () => {
       records: [valid],
       retryRequired: false,
     });
+    const inspectLifecycleOwner = (projectId: string) => (
+      transitionStore as unknown as {
+        inspectLifecycleOwner(candidateProjectId: string): Promise<
+          'absent' | 'nonterminal' | 'terminal'
+        >;
+      }
+    ).inspectLifecycleOwner(projectId);
+    await expect(inspectLifecycleOwner('project-corrupt')).resolves.toBe('nonterminal');
+    await expect(inspectLifecycleOwner('project-directory')).resolves.toBe('nonterminal');
+    const lifecycle = new CollabProjectLifecycleSubsystem({
+      closeRecovery: async () => undefined,
+      durableOwners: [{
+        inspect: inspectLifecycleOwner,
+        name: 'cloud-bootstrap',
+      }],
+      hostTransfer: {} as never,
+      localExit: {} as never,
+      recoveryStages: [],
+      retirement: {} as never,
+    });
+    const fenceUncertainProject = jest.fn(async (_projectId: string) => undefined);
+    const bootstrap = new CloudBootstrapService({
+      assertHostInstallationOwned: async () => undefined,
+      assertRecoveryOwner: () => undefined,
+      createCoordinator: () => ({}) as never,
+      fenceUncertainProject,
+      projectRecoveryAdmission: (projectId, operation) => lifecycle.runExclusive(
+        projectId,
+        'cloud-bootstrap',
+        'recovery',
+        operation,
+      ),
+      recoverLocalArtifacts: async () => undefined,
+      transitions: transitionStore,
+    });
+    await expect(bootstrap.prepareLocalRecovery()).resolves.toBeUndefined();
+    expect(fenceUncertainProject.mock.calls.map(([projectId]) => projectId).sort()).toEqual([
+      PROJECT_ID,
+      'project-corrupt',
+      'project-directory',
+    ]);
+    await bootstrap.close();
+    await lifecycle.lifecycleRecovery.close();
     await expect(transitionStore.load('project-corrupt')).rejects.toMatchObject({
       safeContext: {
         projectId: 'project-corrupt',
@@ -309,11 +361,12 @@ describe('Former Host Cloud bootstrap fence', () => {
       records: [],
       retryRequired: true,
     });
+    await expect(inspectLifecycleOwner(PROJECT_ID)).resolves.toBe('nonterminal');
     await chmod(validPath, 0o600);
   });
 
   it('serializes a LAN Host start against durable fence creation', async () => {
-    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot);
+    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
     let releaseStart: (() => void) | undefined;
     let markStarted: (() => void) | undefined;
     const started = new Promise<void>(resolve => { markStarted = resolve; });
@@ -325,6 +378,7 @@ describe('Former Host Cloud bootstrap fence', () => {
     await started;
     let fenceCreated = false;
     const create = transitionStore.create(createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
       developmentActorId: HOST_MEMBER_ID,
       fenceId: 'bootstrap-fence-one',
       manifest: bootstrapManifest(),
@@ -352,6 +406,64 @@ describe('Former Host Cloud bootstrap fence', () => {
     });
   });
 
+  it('keeps a foreign synchronized bootstrap record inert for lifecycle and Host start', async () => {
+    const writer = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
+    await writer.create(createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
+      developmentActorId: HOST_MEMBER_ID,
+      fenceId: 'bootstrap-fence-one',
+      manifest: bootstrapManifest(),
+      manifestSha256: MANIFEST_SHA256,
+      memberId: HOST_MEMBER_ID,
+      oldEndpoint: 'https://192.168.1.20:54545',
+      oldGitRemoteUrl: `https://192.168.1.20:54545/v1/git/${PROJECT_ID}/repository.git`,
+      serverUrl: 'https://cloud.example.test',
+      timestamp: '2026-08-21T00:00:00.000Z',
+    }));
+    const foreign = new CloudBootstrapTransitionStore(vaultRoot, {
+      isRecoveryOwner: ownerInstallationKey => ownerInstallationKey === TEST_INSTALLATION_B,
+    });
+
+    await expect(foreign.inspectLifecycleOwner(PROJECT_ID)).resolves.toBe('absent');
+    await expect(foreign.runWithLanHostStartGuard(
+      PROJECT_ID,
+      async () => 'running',
+    )).resolves.toBe('running');
+  });
+
+  it('keeps an ownerless legacy bootstrap fence visible and blocks Host restart', async () => {
+    const current = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
+      developmentActorId: HOST_MEMBER_ID,
+      fenceId: 'bootstrap-fence-one',
+      manifest: bootstrapManifest(),
+      manifestSha256: MANIFEST_SHA256,
+      memberId: HOST_MEMBER_ID,
+      oldEndpoint: 'https://192.168.1.20:54545',
+      oldGitRemoteUrl: `https://192.168.1.20:54545/v1/git/${PROJECT_ID}/repository.git`,
+      serverUrl: 'https://cloud.example.test',
+      timestamp: '2026-08-21T00:00:00.000Z',
+    });
+    const { ownerInstallationKey: _ownerInstallationKey, ...withoutOwner } = current;
+    const writer = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
+    await writer.create(decodeCloudBootstrapTransitionRecord({
+      ...withoutOwner,
+      schemaVersion: 1,
+    }));
+    const ownerAware = new CloudBootstrapTransitionStore(vaultRoot, {
+      isRecoveryOwner: ownerInstallationKey => ownerInstallationKey === TEST_INSTALLATION_A,
+    });
+
+    await expect(ownerAware.inspectLifecycleOwner(PROJECT_ID)).resolves.toBe('nonterminal');
+    await expect(ownerAware.runWithLanHostStartGuard(
+      PROJECT_ID,
+      async () => 'unexpected',
+    )).rejects.toMatchObject({
+      code: 'durable-progress-recovery-required',
+      safeContext: { reason: 'cloud-bootstrap-legacy-owner-missing' },
+    });
+  });
+
   it('fails transition creation and update closed when directory sync is unavailable', async () => {
     const transitionDirectory = path.join(
       vaultRoot,
@@ -360,8 +472,9 @@ describe('Former Host Cloud bootstrap fence', () => {
       'cloud-bootstrap-transitions',
     );
     await mkdir(transitionDirectory, { mode: 0o300 });
-    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot);
+    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
     const record = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
       developmentActorId: HOST_MEMBER_ID,
       fenceId: 'bootstrap-fence-one',
       manifest: bootstrapManifest(),
@@ -388,8 +501,9 @@ describe('Former Host Cloud bootstrap fence', () => {
   });
 
   it('archives a durable cancellation before admitting a new bootstrap attempt', async () => {
-    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot);
+    const transitionStore = new CloudBootstrapTransitionStore(vaultRoot, { isRecoveryOwner: () => true });
     const first = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
       developmentActorId: HOST_MEMBER_ID,
       fenceId: 'bootstrap-fence-one',
       manifest: bootstrapManifest(),
@@ -415,6 +529,7 @@ describe('Former Host Cloud bootstrap fence', () => {
     await transitionStore.save(cleanupPending);
     const nextManifest = { ...bootstrapManifest(), attemptId: 'bootstrap-attempt-two' };
     const next = createCloudBootstrapTransitionRecord({
+      ownerInstallationKey: TEST_INSTALLATION_A,
       developmentActorId: HOST_MEMBER_ID,
       fenceId: 'bootstrap-fence-two',
       manifest: nextManifest,

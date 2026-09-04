@@ -687,13 +687,17 @@ export class ClaudianView extends ItemView {
 
     const navActionsEl = wrapper.createDiv({ cls: 'claudian-input-nav-actions' });
 
-    this.newTabButtonEl = navActionsEl.createDiv({ cls: 'claudian-input-nav-btn claudian-new-tab-btn' });
+    this.newTabButtonEl = navActionsEl.createEl('button', {
+      cls: 'claudian-input-nav-btn claudian-new-tab-btn',
+      attr: { type: 'button' },
+    });
     setIcon(this.newTabButtonEl, 'square-plus');
     this.newTabButtonEl.setAttribute('aria-label', 'New tab');
     this.newTabButtonEl.addEventListener('click', () => this.requestNewTab());
 
-    const newBtn = navActionsEl.createDiv({
+    const newBtn = navActionsEl.createEl('button', {
       cls: 'claudian-input-nav-btn claudian-new-conversation-btn',
+      attr: { type: 'button' },
     });
     setIcon(newBtn, 'square-pen');
     newBtn.setAttribute('aria-label', 'New conversation');
@@ -703,7 +707,10 @@ export class ClaudianView extends ItemView {
     const historyContainer = navActionsEl.createDiv({
       cls: 'claudian-history-container claudian-nav-dropup-container',
     });
-    const historyBtn = historyContainer.createDiv({ cls: 'claudian-input-nav-btn' });
+    const historyBtn = historyContainer.createEl('button', {
+      cls: 'claudian-input-nav-btn',
+      attr: { type: 'button' },
+    });
     setIcon(historyBtn, 'history');
     historyBtn.setAttribute('aria-label', 'Chat history');
 
@@ -1215,6 +1222,9 @@ export class ClaudianView extends ItemView {
       onSetConversationArchived: (id: string, isArchived: boolean) => (
         this.setConversationArchived(id, isArchived)
       ),
+      onAssignConversationToDevice: async (id: string) => {
+        await this.plugin.assignConversationToCurrentDevice(id);
+      },
       ...(navigationMode === 'history'
         ? {
             onBeforeRestoreListState: (target: HTMLElement) => (
@@ -1695,6 +1705,11 @@ export class ClaudianView extends ItemView {
   private handleWorkspaceFileOpen(file: TFile | null): void {
     this.tabManager?.getActiveTab()?.ui.linkedContentController
       .handleActiveFileChanged(file, true);
+  }
+
+  private handleLinkedContentMetadataChanged(file: TFile | null): void {
+    this.tabManager?.getActiveTab()?.ui.linkedContentController
+      .handleActiveFileMetadataChanged(file);
   }
 
   handleLinkedContentRenamed(
@@ -2600,6 +2615,21 @@ export class ClaudianView extends ItemView {
     this.registerEvent(
       this.plugin.app.workspace.on('file-open', (file) => {
         this.handleWorkspaceFileOpen(file);
+      })
+    );
+    this.registerEvent(
+      this.plugin.app.metadataCache.on('changed', (file) => {
+        this.handleLinkedContentMetadataChanged(file);
+      })
+    );
+    this.registerEvent(
+      this.plugin.app.metadataCache.on('resolve', (file) => {
+        this.handleLinkedContentMetadataChanged(file);
+      })
+    );
+    this.registerEvent(
+      this.plugin.app.metadataCache.on('resolved', () => {
+        this.handleLinkedContentMetadataChanged(null);
       })
     );
 

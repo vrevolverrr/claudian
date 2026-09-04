@@ -1,5 +1,26 @@
 import { randomUUID } from 'node:crypto';
 
+import {
+  AuthorityTransferLocalConvergence,
+} from '@/app/collab/authority-transfer/AuthorityTransferLocalConvergence';
+import {
+  AuthorityTransferLocalFence,
+} from '@/app/collab/authority-transfer/AuthorityTransferLocalFence';
+import {
+  AuthorityTransferModule,
+} from '@/app/collab/authority-transfer/AuthorityTransferModule';
+import {
+  isAuthorityTransferTerminalResponderExpired,
+} from '@/app/collab/authority-transfer/AuthorityTransferRecord';
+import {
+  AuthorityTransferClaimantBindingResolver,
+} from '@/app/collab/authority-transfer/claim/AuthorityTransferClaimantBindingResolver';
+import {
+  ProductionCloudToLanTargetEffects,
+} from '@/app/collab/authority-transfer/cloud-to-lan/ProductionCloudToLanTargetEffects';
+import {
+  ProductionLanToCloudSourceEffects,
+} from '@/app/collab/authority-transfer/lan-to-cloud/ProductionLanToCloudSourceEffects';
 import { CloudBootstrapBindingFinalizer } from '@/app/collab/bootstrap/CloudBootstrapBindingFinalizer';
 import { CloudBootstrapCoordinator } from '@/app/collab/bootstrap/CloudBootstrapCoordinator';
 import { CloudBootstrapLocalFence } from '@/app/collab/bootstrap/CloudBootstrapLocalFence';
@@ -26,7 +47,10 @@ import {
   type CollabLocalExitPort,
   type CollabRetirementPort,
 } from '@/app/collab/CollabFeatureService';
-import { isCollabLocalLanMembership } from '@/app/collab/CollabLocalProjectRepository';
+import {
+  isCollabLocalCloudMembership,
+  isCollabLocalLanMembership,
+} from '@/app/collab/CollabLocalProjectRepository';
 import { FilesystemLocalRepositoryIdentity } from '@/app/collab/exit/FilesystemLocalRepositoryIdentity';
 import {
   LocalExitProjectStore,
@@ -42,9 +66,13 @@ import { PendingLeaveWorker } from '@/app/collab/exit/PendingLeaveWorker';
 import { RetiredProjectFinalizer } from '@/app/collab/exit/RetiredProjectFinalizer';
 import {
   ensureTrustedCollabOrigin,
+  rotateAuthorityTransferOrigin,
   rotateCloudBootstrapOrigin,
 } from '@/app/collab/git/CollabGitOriginPolicy';
 import { CollabLifecycleJournalStore } from '@/app/collab/lifecycle/CollabLifecycleJournalStore';
+import {
+  createCollabProjectLifecycleDurableOwners,
+} from '@/app/collab/lifecycle/CollabProjectLifecycleOwners';
 import { CollabProjectLifecycleSubsystem } from '@/app/collab/lifecycle/CollabProjectLifecycleSubsystem';
 import { CollabMembershipService } from '@/app/collab/membership/CollabMembershipService';
 import {
@@ -56,6 +84,7 @@ import { CloudAuthorityAdapter } from '@/app/collab/remote-authority/CloudAuthor
 import {
   CollabAuthorityGitNetworkEnvironment,
 } from '@/app/collab/remote-authority/CollabAuthorityGitNetworkEnvironment';
+import { CloudRetirementClient } from '@/app/collab/retirement/CloudRetirementClient';
 import { RetirementAcknowledgementWorker } from '@/app/collab/retirement/RetirementAcknowledgementWorker';
 import { RetirementClientHandler } from '@/app/collab/retirement/RetirementClientHandler';
 import { RetirementLocalRecovery } from '@/app/collab/retirement/RetirementLocalRecovery';
@@ -63,12 +92,14 @@ import { type CollabFinalizeRetiredProjectRequest, type CollabLeaveProjectReques
 import { CollabError } from '@/core/collab/ClaudianCollabError';
 
 export interface CollabFeatureSubcompositionOptions {
+  readonly cloudAuthority?: Pick<CloudAuthorityAdapter, 'create' | 'createLifecycle'>;
   readonly foundation: ClaudianCollabService;
   readonly projectSetup: CollabProjectSetupService;
   readonly vaultRoot: string;
 }
 
 export interface CollabFeatureSubcomposition {
+  readonly authorityTransfer: AuthorityTransferModule;
   readonly feature: CollabFeatureService;
 }
 
@@ -93,6 +124,7 @@ export function createCollabFeatureSubcomposition(
 ): CollabFeatureSubcomposition {
   const { foundation, projectSetup, vaultRoot } = options;
   const journals = new CollabLifecycleJournalStore(vaultRoot);
+  const transitions = foundation.cloudBootstrapTransitions;
   const pendingLeaves = journals.pendingLeaves;
   const pendingLeaveAuthority = new PendingLeaveAuthorityService({
     hostTransitionCandidates: foundation.hostTransitionCandidates,
@@ -142,6 +174,15 @@ export function createCollabFeatureSubcomposition(
 
   let lifecycle: CollabProjectLifecycleSubsystem | null = null;
   let publication: CollabPublicationService | null = null;
+  const requireLifecycle = (): CollabProjectLifecycleSubsystem => {
+    if (!lifecycle) {
+      throw new CollabError({
+        code: 'not-initialized',
+        safeContext: { reason: 'collab-lifecycle-not-composed' },
+      });
+    }
+    return lifecycle;
+  };
   const requirePublication = (): CollabPublicationService => {
     if (!publication) {
       throw new CollabError({
@@ -151,10 +192,26 @@ export function createCollabFeatureSubcomposition(
     }
     return publication;
   };
+  const cloudAuthority = options.cloudAuthority ?? new CloudAuthorityAdapter();
+  const cloudRetirement = new CloudRetirementClient({
+    createLifecycle: binding => cloudAuthority.createLifecycle(binding),
+    createSession: membership => cloudAuthority.create(membership),
+  });
   const acknowledgementWorker = new RetirementAcknowledgementWorker(
     foundation.local.projects,
     {
       acknowledge: input => foundation.acknowledgeRetirement(input),
+      acknowledgeCloud: input => cloudRetirement.acknowledge(input, {
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    },
+    {
+      projectRecoveryAdmission: (projectId, operation) => requireLifecycle().runExclusive(
+        projectId,
+        'retirement',
+        'recovery',
+        operation,
+      ),
     },
   );
   const retirementHandler = new RetirementClientHandler(
@@ -181,35 +238,65 @@ export function createCollabFeatureSubcomposition(
     },
   );
   foundation.setRetirementHandler(retirementHandler);
-  const membership = new CollabMembershipService(
-    foundation.local.projects,
-    {
-      readCoordinationSnapshot: (...args) => (
-        requirePublication().readCoordinationSnapshot(...args)
+  publication = new CollabPublicationService(foundation, {
+    discovery: foundation.discovery,
+    inspectHostInstallation: projectId => foundation.hostInstallations.inspect(projectId),
+    readActiveLocalRoute: projectId => foundation.lanHost.getActiveProjectRoute(projectId),
+    managerResponsibility: {
+      reconcileSnapshot: snapshot => requireLifecycle().runExclusive(
+          snapshot.project.id,
+          'manager-responsibility',
+          'continuation',
+          () => membership.reconcileManagerResponsibilitySnapshot(snapshot),
       ),
+    },
+    reconnect: foundation.reconnect,
+    retirement: retirementHandler,
+    retirementAdmission: (projectId, operation) => requireLifecycle().runRetirementAdoption(
+      projectId,
+      operation,
+    ),
+    vaultRoot,
+  });
+  const membership = new CollabMembershipService(
+    publication.membershipControl,
+    {
+      readCoordinationSnapshot: (...args) => publication.readCoordinationSnapshot(...args),
     },
     {},
     {
+      managerResponsibilityAdmission: (projectId, operation) => (
+        requireLifecycle().runExclusive(
+          projectId,
+          'manager-responsibility',
+          'operation',
+          operation,
+        )
+      ),
       managerReceipts,
       managerResponsibilityOperations,
       pendingLeaves,
     },
   );
-  publication = new CollabPublicationService(foundation, {
-    discovery: foundation.discovery,
-    isLocalHostRunning: projectId => foundation.lanHost.isProjectRunning(projectId),
-    managerResponsibility: {
-      reconcileSnapshot: snapshot => membership
-        .reconcileManagerResponsibilitySnapshot(snapshot),
-    },
-    reconnect: foundation.reconnect,
-    retirement: retirementHandler,
-    vaultRoot,
-  });
   foundation.lanHost.bindConnectionProjection({
     resetProjectConnection: projectId => requirePublication().resetProjectConnection(projectId),
   });
-  const hostTransfer = foundation.createHostTransferService(publication);
+  const hostTransfer = foundation.createHostTransferService(
+    {
+      readCoordinationSnapshot: (...args) => (
+        requirePublication().transferSnapshot(...args)
+      ),
+    },
+    (projectId, operation) => requireLifecycle().runExclusive(
+      projectId,
+      'host-transfer',
+      'recovery',
+      operation,
+    ),
+    () => {
+      void requireLifecycle().refreshLifecycleProjection().catch(() => undefined);
+    },
+  );
   let exitCoordinator: LocalProjectExitCoordinator | null = null;
   const requireExitCoordinator = (): Promise<LocalProjectExitCoordinator> => {
     if (!exitCoordinator) {
@@ -262,13 +349,24 @@ export function createCollabFeatureSubcomposition(
   };
   const pendingLeaveWorker = new PendingLeaveWorker(pendingLeaves, {
     resume: async (...args) => (await requireExitCoordinator()).resume(...args),
-  });
+  }, (projectId, operation) => requireLifecycle().runExclusive(
+    projectId,
+    'local-exit',
+    'recovery',
+    operation,
+  ));
   const retirementLocalRecovery = new RetirementLocalRecovery(
     foundation.local.projects,
     pendingLeaves,
     retiredCleanupRecords,
     retirementHandler,
     retiredFinalizer,
+    (projectId, operation) => requireLifecycle().runExclusive(
+      projectId,
+      'retirement',
+      'recovery',
+      operation,
+    ),
   );
   const retirement: CollabRetirementPort = {
     close: () => retirementHandler.close(),
@@ -282,8 +380,14 @@ export function createCollabFeatureSubcomposition(
       }, operationOptions);
     },
     retireProject: async (request, operationOptions): Promise<void> => {
-      const result = await foundation.retireProject(request, operationOptions?.signal);
-      await retirementHandler.handle(result, 'response');
+      const localMembership = await foundation.local.projects.loadMembership(request.projectId);
+      const result = localMembership && isCollabLocalCloudMembership(localMembership)
+        ? await cloudRetirement.retire(localMembership, request, operationOptions)
+        : await foundation.retireProject(request, operationOptions?.signal);
+      await requireLifecycle().runRetirementAdoption(
+        request.projectId,
+        () => retirementHandler.handle(result, 'response'),
+      );
     },
     retryProjectCleanup: async (projectId, operationOptions): Promise<void> => {
       if (operationOptions?.signal?.aborted) throw cancelled();
@@ -292,12 +396,34 @@ export function createCollabFeatureSubcomposition(
   };
   lifecycle = new CollabProjectLifecycleSubsystem({
     closeRecovery: () => acknowledgementWorker.close(),
+    durableOwners: createCollabProjectLifecycleDurableOwners(
+      {
+        cloudBootstrapTransitions: transitions,
+        hostTransferRecovery: foundation.local.projects.hostTransferRecovery,
+        localCleanup: foundation.local.projects.localCleanup,
+        managerReceipts,
+        pendingLeaves,
+        retiredCleanups: retiredCleanupRecords,
+        retirements: foundation.local.projects,
+        retirementTombstones: foundation.local.projects,
+      },
+      ownerInstallationKey => foundation.hostInstallations.isRecoveryOwner(
+        ownerInstallationKey,
+      ),
+    ),
     hostTransfer,
     localExit,
     recoveryStages: [
       {
         name: 'retirement-responders',
-        run: () => foundation.restoreRetirementResponders(),
+        run: () => foundation.restoreRetirementResponders(
+          (projectId, operation) => requireLifecycle().runExclusive(
+            projectId,
+            'retirement',
+            'recovery',
+            operation,
+          ),
+        ),
       },
       {
         name: 'host-transfers',
@@ -334,6 +460,20 @@ export function createCollabFeatureSubcomposition(
     ],
     retirement,
   });
+  foundation.lanHost.bindProjectLifecycleAdmissions({
+    hostTransfer: (projectId, operation) => requireLifecycle().runExclusive(
+      projectId,
+      'host-transfer',
+      'continuation',
+      operation,
+    ),
+    retirement: (projectId, operation) => requireLifecycle().runExclusive(
+      projectId,
+      'retirement',
+      'continuation',
+      operation,
+    ),
+  });
 
   const bootstrapWorkSessions: CloudBootstrapLocalFence = new CloudBootstrapLocalFence({
     admission: {
@@ -346,7 +486,6 @@ export function createCollabFeatureSubcomposition(
       suspendProject: projectId => requirePublication().suspendProject(projectId),
     },
   });
-  const transitions = foundation.cloudBootstrapTransitions;
   const source = new LocalDevelopmentBootstrapSource({ foundation, vaultRoot });
   const readiness = new CloudBootstrapReadinessCollector(
     new LocalCloudBootstrapReadinessInspector({
@@ -373,7 +512,6 @@ export function createCollabFeatureSubcomposition(
         assertOrigin: async (record, repositoryPath) => ensureTrustedCollabOrigin(
           (await foundation.requireGitFoundation()).repositories,
           {
-            allowHostRemoteRepair: false,
             projectId: record.projectId,
             remoteUrl: record.newAuthority.gitRemoteUrl,
             repositoryPath,
@@ -399,11 +537,31 @@ export function createCollabFeatureSubcomposition(
       },
       projects: foundation.local.projects,
       readiness,
+      retireLanAuthorityDirectory: async (projectId, attemptId) => {
+        const capability = await foundation.hostInstallations.assertOwnedRetirement(
+          projectId,
+          attemptId,
+        );
+        return foundation.local.projects.retireOwnedAuthorityDirectory(
+          capability,
+          attemptId,
+        );
+      },
       workspace: foundation.local.workspace,
     }),
     transitions,
   });
   const cloudBootstrap = new CloudBootstrapService({
+    assertHostInstallationOwned: async projectId => {
+      await foundation.hostInstallations.assertOwned(projectId, 'recover');
+    },
+    assertRecoveryOwner: (ownerInstallationKey, projectId) => (
+      foundation.hostInstallations.assertRecoveryOwner(
+        ownerInstallationKey,
+        projectId,
+        'cloud-bootstrap',
+      )
+    ),
     createCoordinator: ({ developmentActorId, serverUrl }) => (
       new CloudBootstrapCoordinator({
         binding,
@@ -414,6 +572,7 @@ export function createCollabFeatureSubcomposition(
         createFenceId: () => `bootstrap-fence-${randomUUID().replaceAll('-', '')}`,
         formerHost: {
           stopAndDrain: async projectId => {
+            await foundation.hostInstallations.assertOwned(projectId, 'recover');
             const stopped = await foundation.lanHost.stopProject(projectId);
             const membership = await foundation.local.projects.loadMembership(projectId);
             if (
@@ -460,6 +619,7 @@ export function createCollabFeatureSubcomposition(
             };
           },
         },
+        installationKey: foundation.installationKey,
         readiness,
         source,
         transitions,
@@ -467,22 +627,34 @@ export function createCollabFeatureSubcomposition(
       })
     ),
     fenceUncertainProject: projectId => bootstrapWorkSessions.closeAndDrain(projectId),
-    recoverLocalArtifacts: () => source.recoverArtifacts(async manifest => {
-      const record = await transitions.load(manifest.comparison.projectId);
-      return record?.attemptId === manifest.attemptId
-        && record.manifestSha256 === developmentBootstrapManifestSha256(manifest);
-    }),
+    projectRecoveryAdmission: (projectId, operation) => requireLifecycle().runExclusive(
+      projectId,
+      'cloud-bootstrap',
+      'recovery',
+      operation,
+    ),
+    recoverLocalArtifacts: projectRecoveryAdmission => source.recoverArtifacts(
+      async manifest => {
+        const record = await transitions.load(manifest.comparison.projectId);
+        return record?.attemptId === manifest.attemptId
+          && record.manifestSha256 === developmentBootstrapManifestSha256(manifest);
+      },
+      projectRecoveryAdmission,
+    ),
     transitions,
   });
+  const lifecycleCloudBootstrap = lifecycle.bindCloudBootstrap(cloudBootstrap);
+  const lifecycleMembership = lifecycle.bindMembership(membership);
 
   const feature: CollabFeatureService = new CollabFeatureService(foundation, projectSetup, {
-    cloudBootstrap,
+    cloudBootstrap: lifecycleCloudBootstrap,
     hostTransfer: lifecycle.hostTransfer,
+    hostInstallation: foundation.hostInstallations,
     join: foundation.join,
     lanHost: foundation.lanHost,
     lifecycleRecovery: lifecycle.lifecycleRecovery,
     localExit: lifecycle.localExit,
-    membership,
+    membership: lifecycleMembership,
     publication,
     retirement: lifecycle.retirement,
     vaultRoot,
@@ -492,5 +664,164 @@ export function createCollabFeatureSubcomposition(
     refreshLifecycleProjection: () => feature.refreshLifecycleProjection(),
   });
 
-  return Object.freeze({ feature });
+  const authorityTransferLocalFence = new AuthorityTransferLocalFence({
+    admission: {
+      drainAdmittedOperations: () => feature.drainAdmittedOperations(),
+      resumeProjectAdmission: suspension => feature.resumeProjectAdmission(suspension),
+      suspendProjectAdmission: projectId => feature.suspendProjectAdmission(projectId),
+    },
+    workSessions: {
+      resumeProject: suspension => requirePublication().resumeProject(suspension),
+      suspendProject: projectId => requirePublication().suspendProject(projectId),
+    },
+  });
+  const authorityTransferConvergence = new AuthorityTransferLocalConvergence({
+    activity: {
+      transitionProject: (projectId, operation) => (
+        authorityTransferLocalFence.run(projectId, operation)
+      ),
+    },
+    git: {
+      rotate: async input => rotateAuthorityTransferOrigin(
+        (await foundation.requireGitFoundation()).repositories,
+        input,
+      ),
+    },
+    projects: foundation.local.projects,
+    workspace: foundation.local.workspace,
+  });
+  const claimantBindingResolver = new AuthorityTransferClaimantBindingResolver({
+    createCloudLifecycle: binding => cloudAuthority.createLifecycle(binding),
+    loadMembership: projectId => foundation.local.projects.loadMembership(projectId),
+  });
+  const authorityTransfer = new AuthorityTransferModule({
+    activateLanToCloudSourceRoute: (projectId, expectedEndpoint) => (
+      foundation.activateAuthorityTransferSourceRoute(projectId, expectedEndpoint)
+    ),
+    assertRecoveryOwner: (ownerInstallationKey, projectId) => (
+      foundation.hostInstallations.assertRecoveryOwner(
+        ownerInstallationKey,
+        projectId,
+        'authority-transfer',
+      )
+    ),
+    claimantStore: foundation.local.projects.authorityTransferClaimants,
+    convergence: authorityTransferConvergence,
+    createCloudToLanTarget: (projectId, cloudSession) => (
+      new ProductionCloudToLanTargetEffects({
+        cloudSession,
+        convergence: authorityTransferConvergence,
+        foundation,
+        persistence: foundation.authorityTransfers,
+        projectId,
+      })
+    ),
+    createLanToCloudSource: (projectId, cloudSession) => (
+      new ProductionLanToCloudSourceEffects({
+        cloudSession,
+        convergence: authorityTransferConvergence,
+        foundation,
+        persistence: foundation.authorityTransfers,
+        projectId,
+      })
+    ),
+    lifecycle,
+    installationKey: foundation.installationKey,
+    persistence: foundation.authorityTransfers,
+    recoverCloudSession: async record => {
+      const membership = await foundation.local.projects.loadMembership(record.projectId);
+      if (!membership) {
+        throw bootstrapCompositionError('authority-transfer-membership-missing');
+      }
+      if (record.localRole === 'source') {
+        if (!isCollabLocalLanMembership(membership)) {
+          throw bootstrapCompositionError('authority-transfer-source-membership-invalid');
+        }
+        return cloudAuthority.createLifecycle({
+          developmentActorId: membership.member.id,
+          projectId: record.projectId,
+          serverUrl: record.status.targetUrl,
+        });
+      }
+      if (!isCollabLocalCloudMembership(membership)) {
+        throw bootstrapCompositionError('authority-transfer-target-membership-invalid');
+      }
+      return cloudAuthority.createLifecycle({
+        developmentActorId: membership.authority.developmentActorId,
+        projectId: record.projectId,
+        serverUrl: membership.authority.serverUrl,
+      });
+    },
+    recoverClaimant: record => claimantBindingResolver.resolve(record),
+    terminalResolver: {
+      resolve: async record => {
+        if (
+          record.localRole === 'target'
+          && record.status.direction === 'cloud-to-lan'
+          && record.status.state === 'completed'
+          && record.status.relinquishmentProof !== null
+        ) {
+          return {
+            resume: async () => {
+              await new ProductionCloudToLanTargetEffects({
+                cloudSession: null,
+                convergence: authorityTransferConvergence,
+                foundation,
+                persistence: foundation.authorityTransfers,
+                projectId: record.projectId,
+              }).restoreCompleted(record);
+            },
+          };
+        }
+        if (
+          record.localRole !== 'source'
+          || record.status.direction !== 'lan-to-cloud'
+          || record.status.state !== 'completed'
+          || record.status.relinquishmentProof === null
+          || record.terminalResponder === null
+        ) return null;
+        return {
+          resume: async () => {
+            const membership = await foundation.local.projects.loadMembership(
+              record.projectId,
+            );
+            if (!membership) {
+              throw bootstrapCompositionError('authority-transfer-terminal-membership-missing');
+            }
+            const cloudSession = isAuthorityTransferTerminalResponderExpired(
+              record,
+              new Date(),
+            )
+              ? null
+              : await cloudAuthority.createLifecycle({
+                  developmentActorId: isCollabLocalCloudMembership(membership)
+                    ? membership.authority.developmentActorId
+                    : membership.member.id,
+                  projectId: record.projectId,
+                  serverUrl: isCollabLocalCloudMembership(membership)
+                    ? membership.authority.serverUrl
+                    : record.status.targetUrl,
+                });
+            try {
+              await new ProductionLanToCloudSourceEffects({
+                cloudSession,
+                convergence: authorityTransferConvergence,
+                foundation,
+                persistence: foundation.authorityTransfers,
+                projectId: record.projectId,
+              }).restoreCompleted(record);
+            } finally {
+              cloudSession?.dispose();
+            }
+          },
+        };
+      },
+    },
+  });
+  foundation.bindAuthorityTransferModule(authorityTransfer);
+
+  return Object.freeze({
+    authorityTransfer,
+    feature,
+  });
 }

@@ -26,6 +26,10 @@ const TRANSITION_DIRECTORY = '.claudian/collab/cloud-bootstrap-transitions';
 const TRANSITION_HISTORY_DIRECTORY = '.claudian/collab/cloud-bootstrap-transition-history';
 const MAX_TRANSITION_BYTES = 128 * 1024;
 
+export interface CloudBootstrapTransitionStoreOptions {
+  readonly isRecoveryOwner: (ownerInstallationKey: string | undefined) => boolean;
+}
+
 function storeError(reason: string, projectId?: string): CollabError {
   return new CollabError({
     code: 'operation-failed',
@@ -34,6 +38,14 @@ function storeError(reason: string, projectId?: string): CollabError {
       ...(projectId === undefined ? {} : { projectId }),
       reason,
     },
+  });
+}
+
+function recoveryError(reason: string, projectId: CollabProjectId): CollabError {
+  return new CollabError({
+    code: 'durable-progress-recovery-required',
+    recoveryActions: ['resume', 'open-diagnostics'],
+    safeContext: { projectId, reason },
   });
 }
 
@@ -106,9 +118,16 @@ function assertMonotonic(
 }
 
 export class CloudBootstrapTransitionStore implements CloudBootstrapTransitionStorePort {
+  private blockedLifecycleProjectIds = new Set<CollabProjectId>();
+  private readonly isRecoveryOwner: CloudBootstrapTransitionStoreOptions['isRecoveryOwner'];
   private readonly queue = new SerialTaskQueue();
 
-  constructor(private readonly vaultRoot: string) {}
+  constructor(
+    private readonly vaultRoot: string,
+    options: CloudBootstrapTransitionStoreOptions,
+  ) {
+    this.isRecoveryOwner = options.isRecoveryOwner;
+  }
 
   create(
     record: CloudBootstrapTransitionRecord,
@@ -158,16 +177,38 @@ export class CloudBootstrapTransitionStore implements CloudBootstrapTransitionSt
     return this.queue.run(() => this.loadUnlocked(projectId));
   }
 
+  inspectLifecycleOwner(
+    projectId: CollabProjectId,
+  ): Promise<'absent' | 'nonterminal' | 'terminal'> {
+    return this.queue.run(async () => {
+      if (this.blockedLifecycleProjectIds.has(projectId)) return 'nonterminal';
+      const record = await this.loadUnlocked(projectId);
+      if (!record) return 'absent';
+      if (
+        record.ownerInstallationKey !== undefined
+        && !this.isRecoveryOwner(record.ownerInstallationKey)
+      ) return 'absent';
+      return record.terminalCleanupCompleted ? 'terminal' : 'nonterminal';
+    });
+  }
+
   runWithLanHostStartGuard<T>(
     projectId: CollabProjectId,
     operation: () => Promise<T>,
   ): Promise<T> {
     return this.queue.run(async () => {
       const record = await this.loadUnlocked(projectId);
+      if (record && record.ownerInstallationKey === undefined) {
+        throw recoveryError('cloud-bootstrap-legacy-owner-missing', projectId);
+      }
       if (
-        record?.fence.state === 'active'
-        || record?.fence.state === 'host-stopped'
-        || record?.fence.state === 'terminal'
+        record
+        && this.isRecoveryOwner(record.ownerInstallationKey)
+        && (
+          record.fence.state === 'active'
+          || record.fence.state === 'host-stopped'
+          || record.fence.state === 'terminal'
+        )
       ) {
         throw storeError('cloud-bootstrap-host-fence-active', projectId);
       }
@@ -230,6 +271,7 @@ export class CloudBootstrapTransitionStore implements CloudBootstrapTransitionSt
           throw error;
         }
       }
+      this.blockedLifecycleProjectIds = new Set(blockedProjectIds);
       return Object.freeze({
         blockedProjectIds: Object.freeze(blockedProjectIds.sort((left, right) => (
           left.localeCompare(right, 'en-US')

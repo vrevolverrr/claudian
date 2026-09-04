@@ -122,6 +122,8 @@ Provider-specific session fields belong behind typed helpers in the owning provi
 - Treat documented owning-module and public interfaces as pre-agreed test seams. If behavior cannot be verified without reaching past a seam, resolve the ownership or interface decision before writing the test; do not add a test-only facade or public method.
 - Build vertical tracer bullets: exercise one observable behavior at one seam with the minimum implementation needed to prove it. Do not batch a horizontal layer of tests around imagined types, collaborators, or future behavior.
 - Derive expected results independently from the implementation, using a specification literal, accepted fixture, or worked example. Do not reproduce the production algorithm in the assertion, assert internal call counts, or bypass the owning interface to inspect storage unless that storage contract is the declared seam under test.
+- Do not test statically defined values whose correctness is already established by their source or type declaration. Test the observable behavior that consumes them only when that behavior has meaningful regression risk.
+- When logic is deleted, do not add negative tests that merely prove the removed path no longer exists. Cover only the observable replacement behavior or contract that could realistically regress.
 - Mock only true external boundaries, through narrow operation-specific ports rather than a generic conditional transport. Keep owned modules real.
 - After a tracer bullet is green, review and refactor its structure separately under the passing seam-level tests. Do not mix speculative architecture work into the behavior cycle.
 
@@ -130,6 +132,11 @@ Provider-specific session fields belong behind typed helpers in the owning provi
 - The owner and public contracts named in the applicable scoped guides are the accepted seams for their areas.
 - Accepted Collab protocol fixtures and captured provider-native examples are independent sources of expected behavior.
 - Mock only environment, Obsidian, and provider boundaries. Keep Claudian-owned modules real. For shared provider contracts, prove provider-neutral behavior first, then cover each adapter's distinct native behavior.
+
+## UI Semantics and Tests
+
+- New or materially changed atomic UI actions must use native controls with explicit non-submit button types. Use a non-native interactive element only when native semantics cannot express the interaction, and then cover its accessible name, role, and complete keyboard behavior.
+- At real-DOM UI seams, query actions by role and accessible name with Testing Library, retain assertions for their callback or state outcome, and use targeted jest-axe checks for deterministic component subtrees. MockElement tag or class assertions do not replace that semantic coverage.
 
 ## Provider Rules
 

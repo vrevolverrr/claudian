@@ -98,6 +98,7 @@ export interface CollabHostTrustTransitionProof {
 export interface CollabRetirementResult {
   projectId: CollabProjectId;
   retiredAt: CollabIsoTimestamp;
+  retirementId?: CollabOperationId;
 }
 
 export interface CollabProjectSnapshotBase {
@@ -162,6 +163,11 @@ export type CollabHostStatus =
   | 'running'
   | 'stopping'
   | 'needs-attention';
+export type CollabHostInstallationStatus =
+  | 'not-host'
+  | 'hosted-here'
+  | 'hosted-elsewhere'
+  | 'legacy-unbound';
 
 export interface CollabLocalProjectSummary {
   id: CollabProjectId;
@@ -170,6 +176,7 @@ export interface CollabLocalProjectSummary {
   authorityKind: CollabAuthorityKind;
   health: CollabProjectHealth;
   connectionStatus: CollabConnectionStatus;
+  hostInstallationStatus: CollabHostInstallationStatus;
   hostStatus: CollabHostStatus;
   lifecycle?: CollabProjectLifecycle;
   cleanupStatus?: CollabLocalCleanupStatus;

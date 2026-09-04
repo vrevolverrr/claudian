@@ -7,6 +7,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { TEST_INSTALLATION_A } from '@test/helpers/installations';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 
 import { ManagerSetRepository } from '@/app/collab/authority/ManagerSetRepository';
@@ -68,9 +69,11 @@ describe('ProjectRetirementAuthorityService', () => {
   it('commits the minimum tombstone before projecting terminal authority success', async () => {
     const order: string[] = [];
     const tombstones = new RetirementTombstoneRepository(localProjects, {
+      isRecoveryOwner: () => true,
       now: () => NOW,
     });
     const service = new ProjectRetirementAuthorityService(database, tombstones, {
+      installationKey: TEST_INSTALLATION_A,
       now: () => NOW,
       onTombstoneCommitted: () => order.push('tombstone'),
       onAuthorityCommitted: () => order.push('authority'),
@@ -105,11 +108,39 @@ describe('ProjectRetirementAuthorityService', () => {
     });
   });
 
+  it('retires with an imported active Member still unbound', async () => {
+    await database.mutate(connection => {
+      connection.run(`
+        UPDATE members
+        SET access_state = 'unbound', credential_hash = NULL
+        WHERE member_id = 'member-third' AND status = 'active'
+      `);
+    });
+    const service = new ProjectRetirementAuthorityService(
+      database,
+      new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+      { installationKey: TEST_INSTALLATION_A, now: () => NOW },
+    );
+
+    await expect(service.retire('member-host', request())).resolves.toEqual({
+      projectId: 'project-alpha',
+      retiredAt: NOW.toISOString(),
+    });
+
+    await expect(localProjects.loadRetirementTombstone('project-alpha'))
+      .resolves.toEqual(expect.objectContaining({
+        formerMembers: [
+          expect.objectContaining({ memberId: 'member-host' }),
+          expect.objectContaining({ memberId: 'member-second' }),
+        ],
+      }));
+  });
+
   it('allows an active Manager who is neither Host nor Project creator to Retire', async () => {
     const service = new ProjectRetirementAuthorityService(
       database,
-      new RetirementTombstoneRepository(localProjects, { now: () => NOW }),
-      { now: () => NOW },
+      new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+      { installationKey: TEST_INSTALLATION_A, now: () => NOW },
     );
 
     await expect(service.retire('member-second', request('member-second'))).resolves.toEqual({
@@ -143,8 +174,8 @@ describe('ProjectRetirementAuthorityService', () => {
       });
       const service = new ProjectRetirementAuthorityService(
         database,
-        new RetirementTombstoneRepository(localProjects, { now: () => NOW }),
-        { now: () => NOW },
+        new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+        { installationKey: TEST_INSTALLATION_A, now: () => NOW },
       );
 
       await expect(service.retire('member-second', legacyRequest)).resolves.toEqual({
@@ -177,8 +208,8 @@ describe('ProjectRetirementAuthorityService', () => {
     await database.mutate(connection => insertHostTransition(connection));
     const service = new ProjectRetirementAuthorityService(
       database,
-      new RetirementTombstoneRepository(localProjects, { now: () => NOW }),
-      { now: () => NOW },
+      new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+      { installationKey: TEST_INSTALLATION_A, now: () => NOW },
     );
 
     await service.retire('member-host', request());
@@ -201,8 +232,8 @@ describe('ProjectRetirementAuthorityService', () => {
   it('resumes the same durable Retire intent without creating another result', async () => {
     const service = new ProjectRetirementAuthorityService(
       database,
-      new RetirementTombstoneRepository(localProjects, { now: () => NOW }),
-      { now: () => NOW },
+      new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+      { installationKey: TEST_INSTALLATION_A, now: () => NOW },
     );
 
     const first = await service.retire('member-host', request());
@@ -218,9 +249,11 @@ describe('ProjectRetirementAuthorityService', () => {
     let current = NOW;
     let failAfterTombstone = true;
     const tombstones = new RetirementTombstoneRepository(localProjects, {
+      isRecoveryOwner: () => true,
       now: () => current,
     });
     const interrupted = new ProjectRetirementAuthorityService(database, tombstones, {
+      installationKey: TEST_INSTALLATION_A,
       now: () => current,
       onTombstoneCommitted: () => {
         if (failAfterTombstone) throw new Error('simulated crash');
@@ -241,8 +274,8 @@ describe('ProjectRetirementAuthorityService', () => {
   it('fails closed for stale responsibility or a competing terminal intent', async () => {
     const service = new ProjectRetirementAuthorityService(
       database,
-      new RetirementTombstoneRepository(localProjects, { now: () => NOW }),
-      { now: () => NOW },
+      new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }),
+      { installationKey: TEST_INSTALLATION_A, now: () => NOW },
     );
 
     await expect(service.retire('member-third', request('member-third')))
@@ -279,7 +312,7 @@ describe('ProjectRetirementAuthorityService', () => {
       legacy.close();
     }
     if (tombstoneWritten) {
-      await new RetirementTombstoneRepository(localProjects, { now: () => NOW }).savePrepared({
+      await new RetirementTombstoneRepository(localProjects, { isRecoveryOwner: () => true, now: () => NOW }).savePrepared({
         expiresAt: '2026-09-12T08:00:00.000Z',
         formerMembers: [
           { acknowledgedAt: null, credentialHash: '01'.repeat(32), memberId: 'member-host' },
@@ -288,6 +321,7 @@ describe('ProjectRetirementAuthorityService', () => {
         ],
         hostTransitionProofs: [],
         kind: 'retirement-tombstone',
+    ownerInstallationKey: TEST_INSTALLATION_A,
         projectId: 'project-alpha',
         replay: {
           actorMemberId: 'member-second',
@@ -296,7 +330,7 @@ describe('ProjectRetirementAuthorityService', () => {
         },
         result: { projectId: 'project-alpha', retiredAt: NOW.toISOString() },
         retiredAt: NOW.toISOString(),
-        schemaVersion: 1,
+        schemaVersion: 2,
       });
     }
     database = new SqlJsProjectDatabase(authorityDirectory, {
