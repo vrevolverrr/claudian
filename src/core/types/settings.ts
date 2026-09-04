@@ -186,9 +186,6 @@ export interface ClaudianSettings {
   enableDualPane: boolean;
   dualPaneSide: DualPaneSide;
   restoreTabsOnStartup: boolean;
-  collabEnabled: boolean;
-  collabProjectsFolder: string;
-  collabGitPath: string;
   sessionManagerOrganization?: SessionManagerOrganization;
   sessionManagerSort?: SessionManagerSort;
   pinnedLinkedContentPaths?: string[];

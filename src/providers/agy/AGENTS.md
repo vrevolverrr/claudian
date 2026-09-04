@@ -38,7 +38,7 @@ The vault system prompt rides inside the prompt text, because agy has no system-
 Two consequences that are not visible from the call site:
 
 - A new appendix or dynamic section reaches only conversations created after the change. Existing conversations never see it, so a prompt-delivered bug fix does not apply retroactively and a brand-new context tag is undocumented in every conversation that already exists. Prefer reusing an already-documented tag over introducing one.
-- `dynamicSections` must merge the caller's sections with agy's own, never replace them. The caller's sections carry Collab's runtime endpoint; replacing them drops Collab for agy alone while every other provider keeps it.
+- `dynamicSections` must merge the caller's sections with agy's own, never replace them. A caller that supplies sections expects them alongside agy's, not substituted.
 
 An explicit `systemInstructions` prompt (inline edit, title generation, instruction refine) replaces the vault prompt outright and is sent every turn, because those run as their own one-shot conversations. Those paths are all `read-only` or `passive`, so agy denies writes on them regardless of what the appendices say.
 

@@ -779,8 +779,8 @@ export interface AgyPromptEnvironment {
  * is sent every time, because those run as their own one-shot conversations.
  *
  * Sending it once also means a conversation never sees a section added later.
- * A new appendix, or Collab being enabled mid-conversation, reaches only
- * conversations created after the change; existing ones need a new chat.
+ * A new appendix reaches only conversations created after the change; existing
+ * ones need a new chat.
  */
 function resolveAgySystemPrompt(
   request: ProviderExecutionRequest,
@@ -799,8 +799,8 @@ function resolveAgySystemPrompt(
     userName: readSetting(environment.settings.userName),
     vaultPath: environment.vaultPath,
   } satisfies SystemPromptSettings, {
-    // The caller's sections carry Collab's runtime endpoint. agy's own two are
-    // appended rather than substituted, so enabling Collab reaches agy too.
+    // agy's own two sections are appended to the caller's rather than
+    // substituted, so a caller-supplied section still reaches agy.
     dynamicSections: [
       ...(systemInstructions.dynamicSections ?? []),
       AGY_NON_INTERACTIVE_APPENDIX,

@@ -120,7 +120,6 @@ function buildComposerDropdown(
     dom.inputEl,
     fileContextManager,
     {
-      collabReferences: options.plugin.collabComposerReferences,
       providerId,
       hiddenCommands: getHiddenCommands?.() ?? new Set(),
       providerConfig: catalogInfo?.config,

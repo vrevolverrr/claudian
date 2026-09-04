@@ -3,7 +3,6 @@ import path from 'node:path';
 
 describe('Input styles', () => {
   const css = readFileSync(path.resolve('src/style/components/input.css'), 'utf8');
-  const historyCss = readFileSync(path.resolve('src/style/components/history.css'), 'utf8');
 
   it('keeps native and non-native navigation buttons chromeless in every state', () => {
     const baseRule = css.match(/\.claudian-input-nav-btn\s*{[^}]*}/)?.[0];
@@ -46,16 +45,6 @@ describe('Input styles', () => {
     expect(nativeInteractionRule).toContain('padding: 0;');
     expect(nativeInteractionRule).toContain('background: transparent;');
     expect(nativeInteractionRule).toContain('color: var(--text-normal);');
-  });
-
-  it('keeps the expanded Collab control muted until interaction', () => {
-    const activeRule = historyCss.match(
-      /\.claudian-compact-collab-button\.is-active\s*{[^}]*}/,
-    )?.[0];
-    expect(activeRule).toContain('border: 0;');
-    expect(activeRule).toContain('background: transparent;');
-    expect(activeRule).toContain('box-shadow: none;');
-    expect(activeRule).toContain('color: var(--text-muted);');
   });
 
   it('lets the browser size the composer textarea from its content', () => {
