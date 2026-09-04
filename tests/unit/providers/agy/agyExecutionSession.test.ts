@@ -9,6 +9,19 @@ import type {
 import type { ProviderHost } from '@/core/providers/ProviderHost';
 import { AgyExecutionSession } from '@/providers/agy/execution/AgyExecutionSession';
 
+// The session resolves the agy binary from disk before it writes a turn, so
+// without this the suite only passes on a machine that happens to have agy
+// installed and fails everywhere else, CI included.
+jest.mock('@/providers/agy/runtime/AgyCliResolver', () => ({
+  AgyCliResolver: class {
+    resolveFromSettings(): string {
+      return '/usr/local/bin/agy';
+    }
+
+    reset(): void {}
+  },
+}));
+
 jest.mock('@/core/process/ManagedStdioProcess', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PassThrough: Pass } = require('node:stream') as typeof streamModule;
