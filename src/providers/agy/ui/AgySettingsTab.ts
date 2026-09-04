@@ -1,4 +1,4 @@
-import { Notice, Setting } from 'obsidian';
+import { type DropdownComponent, Notice, Setting } from 'obsidian';
 
 import type {
   ProviderSettingsTabRenderer,
@@ -10,10 +10,11 @@ import { renderHostnameCliPathSetting } from '../../../shared/settings/HostnameC
 import { renderProviderEnablementSetting } from '../../../shared/settings/ProviderEnablementSetting';
 import { getHostnameKey } from '../../../utils/env';
 import { getAgyWorkspaceServices } from '../app/AgyWorkspaceServices';
-import { getEffectiveAgyModels } from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
+import { agyChatUIConfig } from './AgyChatUIConfig';
 
 const AGY_PROVIDER_ID = 'agy' as const;
+const REFRESH_MODELS_LABEL = 'Refresh agy models';
 
 export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
   render(container: HTMLElement, context: ProviderSettingsTabRendererContext): void {
@@ -36,16 +37,18 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
       },
     });
 
-    const notice = container.createDiv({
-      cls: 'claudian-setting-validation claudian-setting-validation-warning',
+    const warningEl = container.createDiv({ cls: 'claudian-settings-warning-callout' });
+    warningEl.createDiv({
+      cls: 'claudian-settings-warning-callout-title',
+      text: 'Read before enabling',
     });
-    notice.setText(
-      'agy runs one non-interactive turn per message, so it cannot pause to ask '
-      + 'for approval. In Plan and No-edits modes it denies file writes and shell '
-      + 'commands and reports them as failed; only YOLO lets them run, without a '
-      + 'confirmation step. Google\'s terms also do not permit third-party tools '
-      + 'to access Antigravity, and using this may put your account at risk.',
-    );
+    warningEl.createDiv({
+      text: 'agy runs one non-interactive turn per message, so it cannot pause to ask '
+        + 'for approval. In Plan and No-edits modes it denies file writes and shell '
+        + 'commands and reports them as failed; only YOLO lets them run, without a '
+        + 'confirmation step. Google\'s terms also do not permit third-party tools '
+        + 'to access Antigravity, and using this may put your account at risk.',
+    });
 
     renderHostnameCliPathSetting({
       container,
@@ -85,23 +88,36 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
 
     new Setting(container).setName('Models').setHeading();
 
-    const modelList = container.createDiv({ cls: 'claudian-agy-model-list' });
-    const renderModelList = (): void => {
-      const models = getEffectiveAgyModels(
-        getAgyProviderSettings(settingsBag).discoveredModels,
-      );
-      modelList.empty();
-      for (const model of models) {
-        modelList.createDiv({ text: `${model.label} — ${model.id}` });
-      }
-    };
-    renderModelList();
+    const modelSetting = new Setting(container)
+      .setName('Default model')
+      .setDesc('The model new agy conversations start with. Choosing another '
+        + 'model in chat updates this too; reasoning effort stays per conversation.');
 
-    new Setting(container)
-      .setName('Refresh model list')
-      .setDesc('Reads the catalog agy offers for your account.')
-      .addButton((button) => {
-        button.setButtonText('Refresh').onClick(async () => {
+    let modelDropdown!: DropdownComponent;
+    const renderModelOptions = (): void => {
+      modelDropdown.selectEl.empty();
+      for (const option of agyChatUIConfig.getModelOptions(settingsBag)) {
+        modelDropdown.addOption(option.value, option.label);
+      }
+      modelDropdown.setValue(agyChatUIConfig.getDefaultModel?.(settingsBag) ?? '');
+    };
+
+    modelSetting.addDropdown((dropdown) => {
+      modelDropdown = dropdown;
+      renderModelOptions();
+      dropdown.onChange(async (selectedModel) => {
+        await context.plugin.mutateSettings((settings) => {
+          updateAgyProviderSettings(settings, { selectedModel });
+        });
+        context.notifyProviderModelOptionsChanged(AGY_PROVIDER_ID);
+      });
+    });
+
+    modelSetting.addButton((button) => {
+      button
+        .setIcon('refresh-cw')
+        .setTooltip(REFRESH_MODELS_LABEL)
+        .onClick(async () => {
           button.setDisabled(true);
           try {
             const result = await workspace.refreshModelCatalog();
@@ -109,13 +125,18 @@ export const agySettingsTabRenderer: ProviderSettingsTabRenderer = {
               new Notice(`agy model discovery failed: ${result.diagnostics}`);
               return;
             }
-            renderModelList();
+            if (!result.changed) {
+              return;
+            }
+            renderModelOptions();
             context.notifyProviderModelOptionsChanged(AGY_PROVIDER_ID);
           } finally {
             button.setDisabled(false);
           }
         });
-      });
+      button.buttonEl.setAttribute('type', 'button');
+      button.buttonEl.setAttribute('aria-label', REFRESH_MODELS_LABEL);
+    });
 
     renderEnvironmentSettingsSection({
       container,

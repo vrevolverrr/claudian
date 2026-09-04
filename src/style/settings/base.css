@@ -171,6 +171,24 @@
   color: var(--text-warning);
 }
 
+.claudian-settings-warning-callout {
+  margin: 0 0 var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--text-warning);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.claudian-settings-warning-callout-title {
+  margin-bottom: var(--size-2-2);
+  color: var(--text-warning);
+  font-weight: var(--font-semibold);
+}
+
 .claudian-settings-cli-path-input {
   width: 100%;
 }

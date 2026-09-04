@@ -162,12 +162,3 @@
   width: 14px;
   height: 14px;
 }
-
-.claudian-agy-model-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-2-1);
-  margin-bottom: var(--size-4-3);
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-}
