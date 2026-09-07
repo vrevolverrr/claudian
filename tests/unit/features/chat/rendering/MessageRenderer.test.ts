@@ -193,6 +193,43 @@ describe('MessageRenderer', () => {
     expect(interruptedEl.textContent).toBe('Interrupted');
   });
 
+  it('renders timestamps when the setting is enabled', () => {
+    const messagesEl = createMockEl();
+    const { renderer } = createRenderer(messagesEl, 'claude', { showMessageTimestamps: true });
+    const timestamp = new Date('2026-08-12T10:30:00Z').getTime();
+
+    renderer.renderStoredMessage({
+      id: 'timed-user',
+      role: 'user',
+      content: 'Hello',
+      timestamp,
+    });
+
+    const msgEl = messagesEl.children[0];
+    const timestampEl = msgEl.children.find((child: any) => child.hasClass('claudian-message-timestamp'));
+    expect(timestampEl).toBeTruthy();
+    expect(timestampEl.textContent).toBe(new Date(timestamp).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }));
+    expect(timestampEl.getAttribute('aria-label')).toBe(new Date(timestamp).toLocaleString());
+  });
+
+  it('does not render timestamps when the setting is disabled', () => {
+    const messagesEl = createMockEl();
+    const { renderer } = createRenderer(messagesEl, 'claude', { showMessageTimestamps: false });
+
+    renderer.renderStoredMessage({
+      id: 'untimed-user',
+      role: 'user',
+      content: 'Hello',
+      timestamp: Date.now(),
+    });
+
+    const msgEl = messagesEl.children[0];
+    expect(msgEl.children.some((child: any) => child.hasClass('claudian-message-timestamp'))).toBe(false);
+  });
+
   it('renders persisted citation content blocks', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl, 'codex');
@@ -346,7 +383,7 @@ describe('MessageRenderer', () => {
   it('skips empty user message bubble (image-only)', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
-    jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    jest.spyOn(renderer, 'renderMessageImages');
 
     const msg: ChatMessage = {
       id: 'u1',
@@ -371,7 +408,7 @@ describe('MessageRenderer', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
     jest.spyOn(renderer, 'renderContent').mockResolvedValue(undefined);
-    const renderImagesSpy = jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    const renderImagesSpy = jest.spyOn(renderer, 'renderMessageImages');
 
     const images: ImageAttachment[] = [
       { id: 'img-1', name: 'photo.png', mediaType: 'image/png', data: 'base64data', size: 200, source: 'file' },
@@ -1204,7 +1241,7 @@ describe('MessageRenderer', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
     jest.spyOn(renderer, 'renderContent').mockResolvedValue(undefined);
-    const renderImagesSpy = jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    const renderImagesSpy = jest.spyOn(renderer, 'renderMessageImages');
 
     const images: ImageAttachment[] = [
       { id: 'img-1', name: 'photo.png', mediaType: 'image/png', data: 'base64data', size: 200, source: 'file' },
@@ -1226,7 +1263,7 @@ describe('MessageRenderer', () => {
   it('addMessage skips empty bubble for image-only user messages', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
-    jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    jest.spyOn(renderer, 'renderMessageImages');
     const scrollSpy = jest.spyOn(renderer, 'scrollToBottom').mockImplementation(() => {});
 
     const msg: ChatMessage = {
@@ -1588,7 +1625,7 @@ describe('MessageRenderer', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
     jest.spyOn(renderer, 'renderContent').mockResolvedValue(undefined);
-    jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    jest.spyOn(renderer, 'renderMessageImages');
 
     const messages: ChatMessage[] = [
       { id: 'u1', role: 'user', content: 'Hello', timestamp: Date.now() },
@@ -1626,7 +1663,7 @@ describe('MessageRenderer', () => {
     const messagesEl = createMockEl();
     const { renderer } = createRenderer(messagesEl);
     jest.spyOn(renderer, 'renderContent').mockResolvedValue(undefined);
-    jest.spyOn(renderer, 'renderMessageImages').mockImplementation(() => {});
+    jest.spyOn(renderer, 'renderMessageImages');
 
     const messages: ChatMessage[] = [
       { id: 'u1', role: 'user', content: 'Hello', timestamp: Date.now() },
