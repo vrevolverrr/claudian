@@ -14,6 +14,7 @@ import {
   type ChatTurnSubmission,
 } from '@/features/chat/execution/ChatExecutionCoordinator';
 import { ChatState } from '@/features/chat/state/ChatState';
+import type { ComposerInputElement } from '@/shared/composer-dropdown/types';
 
 jest.mock('@/core/providers/ProviderRegistry', () => ({
   ProviderRegistry: {
@@ -38,12 +39,12 @@ jest.mock('@/core/providers/ProviderSettingsCoordinator', () => ({
   },
 }));
 
-function createInput(): HTMLTextAreaElement {
+function createInput(): ComposerInputElement {
   return {
     dispatchEvent: jest.fn().mockReturnValue(true),
     focus: jest.fn(),
     value: '',
-  } as unknown as HTMLTextAreaElement;
+  } as unknown as ComposerInputElement;
 }
 
 function deferred<T>(): {
@@ -223,6 +224,43 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     state,
   };
 }
+
+describe('composer wikilinks', () => {
+  it('sends exact aliased wikilinks and retains them in displayed messages', async () => {
+    const fixture = createFixture();
+    const content = 'Compare [[DEMO.md|DEMO]] and [[- Bases/DEMO.md|DEMO]]';
+    fixture.input.value = content;
+
+    await fixture.controller.sendMessage();
+
+    expect(fixture.coordinator.execute.mock.calls[0][0]).toEqual(expect.objectContaining({
+      canonicalText: content,
+    }));
+    expect(fixture.state.messages.find(message => message.role === 'user')).toEqual(expect.objectContaining({
+      content, displayContent: content,
+    }));
+  });
+
+  it('restores the wikilink source after a definite failure before provider handoff', async () => {
+    const fixture = createFixture();
+    fixture.input.value = '[[Notes/A.md]]';
+    fixture.coordinator.execute.mockRejectedValue(new ChatExecutionPreHandoffError('ledger unavailable'));
+    await fixture.controller.sendMessage();
+    expect(fixture.input.value).toBe('[[Notes/A.md]]');
+    expect(fixture.state.messages).toEqual([]);
+  });
+
+  it('preserves wikilinks when queued messages are merged and returned to the draft', async () => {
+    const fixture = createFixture();
+    fixture.state.isStreaming = true;
+    fixture.input.value = '  [[Notes/A.md]]  ';
+    await fixture.controller.sendMessage();
+    fixture.input.value = '[[Notes/B.md]]';
+    await fixture.controller.sendMessage();
+    fixture.controller.withdrawQueuedMessageToComposer();
+    expect(fixture.input.value).toBe('[[Notes/A.md]]\n\n[[Notes/B.md]]');
+  });
+});
 
 describe('InputController approval details', () => {
   it('makes long approval details a named keyboard-scrollable region', () => {

@@ -30,6 +30,7 @@ export interface MentionSourceCallbacks {
 }
 
 export interface MentionSourceOptions {
+  readonly formatVaultFileMention?: (path: string) => string;
   readonly getExtensionFolders?: (
     signal: AbortSignal,
   ) => Promise<readonly ComposerDropdownFolderItem[]> | readonly ComposerDropdownFolderItem[];
@@ -332,7 +333,7 @@ export class MentionSource implements ComposerDropdownSource {
             id: `vault-file:${file.path}`,
             kind: 'value',
             label: file.path,
-            replacement: formatVaultFileMention(normalized),
+            replacement: (this.options.formatVaultFileMention ?? formatVaultFileMention)(normalized),
             value: { kind: 'vault-file', path: normalized } satisfies MentionValue,
           },
           mtime: file.stat.mtime,

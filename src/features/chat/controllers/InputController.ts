@@ -1,5 +1,7 @@
 import { Notice, setIcon } from 'obsidian';
 
+import type { ComposerInputElement } from '@/shared/composer-dropdown/types';
+
 import {
   type BuiltInCommand,
   detectBuiltInCommand,
@@ -107,7 +109,7 @@ export interface InputControllerDeps {
   browserSelectionController?: BrowserSelectionController;
   canvasSelectionController: CanvasSelectionController;
   conversationController: ConversationController;
-  getInputEl: () => HTMLTextAreaElement;
+  getInputEl: () => ComposerInputElement;
   getWelcomeEl: () => HTMLElement | null;
   getMessagesEl: () => HTMLElement;
   getFileContextManager: () => FileContextManager | null;
