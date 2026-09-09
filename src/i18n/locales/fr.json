@@ -126,39 +126,19 @@
     },
     "hotkeys": "Raccourcis clavier",
     "inlineEditHotkey": {
-      "name": "Édition en ligne",
-      "descWithKey": "Raccourci actuel : {hotkey}",
-      "descNoKey": "Aucun raccourci défini",
-      "btnChange": "Modifier",
-      "btnSet": "Définir"
+      "name": "Édition en ligne"
     },
     "openChatHotkey": {
-      "name": "Ouvrir le chat",
-      "descWithKey": "Raccourci actuel : {hotkey}",
-      "descNoKey": "Aucun raccourci défini",
-      "btnChange": "Modifier",
-      "btnSet": "Définir"
+      "name": "Ouvrir le chat"
     },
     "newSessionHotkey": {
-      "name": "Remplacer la conversation actuelle",
-      "descWithKey": "Raccourci actuel : {hotkey}",
-      "descNoKey": "Aucun raccourci défini",
-      "btnChange": "Modifier",
-      "btnSet": "Définir"
+      "name": "Remplacer la conversation actuelle"
     },
     "newTabHotkey": {
-      "name": "Nouveau",
-      "descWithKey": "Raccourci actuel : {hotkey}",
-      "descNoKey": "Aucun raccourci défini",
-      "btnChange": "Modifier",
-      "btnSet": "Définir"
+      "name": "Nouveau"
     },
     "closeTabHotkey": {
-      "name": "Fermer l'onglet",
-      "descWithKey": "Raccourci actuel : {hotkey}",
-      "descNoKey": "Aucun raccourci défini",
-      "btnChange": "Modifier",
-      "btnSet": "Définir"
+      "name": "Fermer l'onglet"
     },
     "slashCommands": {
       "name": "Commandes et compétences",

@@ -126,39 +126,19 @@
     },
     "hotkeys": "Горячие клавиши",
     "inlineEditHotkey": {
-      "name": "Инлайн-редактирование",
-      "descWithKey": "Текущая клавиша: {hotkey}",
-      "descNoKey": "Клавиша не назначена",
-      "btnChange": "Изменить",
-      "btnSet": "Назначить"
+      "name": "Инлайн-редактирование"
     },
     "openChatHotkey": {
-      "name": "Открыть чат",
-      "descWithKey": "Текущая клавиша: {hotkey}",
-      "descNoKey": "Клавиша не назначена",
-      "btnChange": "Изменить",
-      "btnSet": "Назначить"
+      "name": "Открыть чат"
     },
     "newSessionHotkey": {
-      "name": "Заменить текущий диалог",
-      "descWithKey": "Текущая клавиша: {hotkey}",
-      "descNoKey": "Клавиша не назначена",
-      "btnChange": "Изменить",
-      "btnSet": "Назначить"
+      "name": "Заменить текущий диалог"
     },
     "newTabHotkey": {
-      "name": "Новое",
-      "descWithKey": "Текущая клавиша: {hotkey}",
-      "descNoKey": "Клавиша не назначена",
-      "btnChange": "Изменить",
-      "btnSet": "Назначить"
+      "name": "Новое"
     },
     "closeTabHotkey": {
-      "name": "Закрыть вкладку",
-      "descWithKey": "Текущая клавиша: {hotkey}",
-      "descNoKey": "Клавиша не назначена",
-      "btnChange": "Изменить",
-      "btnSet": "Назначить"
+      "name": "Закрыть вкладку"
     },
     "slashCommands": {
       "name": "Команды и навыки",

@@ -126,39 +126,19 @@
     },
     "hotkeys": "ホットキー",
     "inlineEditHotkey": {
-      "name": "インライン編集",
-      "descWithKey": "現在のホットキー: {hotkey}",
-      "descNoKey": "ホットキー未設定",
-      "btnChange": "変更",
-      "btnSet": "設定"
+      "name": "インライン編集"
     },
     "openChatHotkey": {
-      "name": "チャットを開く",
-      "descWithKey": "現在のホットキー: {hotkey}",
-      "descNoKey": "ホットキー未設定",
-      "btnChange": "変更",
-      "btnSet": "設定"
+      "name": "チャットを開く"
     },
     "newSessionHotkey": {
-      "name": "現在の会話を置き換える",
-      "descWithKey": "現在のホットキー: {hotkey}",
-      "descNoKey": "ホットキー未設定",
-      "btnChange": "変更",
-      "btnSet": "設定"
+      "name": "現在の会話を置き換える"
     },
     "newTabHotkey": {
-      "name": "新規",
-      "descWithKey": "現在のホットキー: {hotkey}",
-      "descNoKey": "ホットキー未設定",
-      "btnChange": "変更",
-      "btnSet": "設定"
+      "name": "新規"
     },
     "closeTabHotkey": {
-      "name": "タブを閉じる",
-      "descWithKey": "現在のホットキー: {hotkey}",
-      "descNoKey": "ホットキー未設定",
-      "btnChange": "変更",
-      "btnSet": "設定"
+      "name": "タブを閉じる"
     },
     "slashCommands": {
       "name": "コマンドとスキル",

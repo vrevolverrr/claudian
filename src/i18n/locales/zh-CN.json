@@ -126,39 +126,19 @@
     },
     "hotkeys": "快捷键",
     "inlineEditHotkey": {
-      "name": "内联编辑",
-      "descWithKey": "当前快捷键：{hotkey}",
-      "descNoKey": "未设置快捷键",
-      "btnChange": "更改",
-      "btnSet": "设置快捷键"
+      "name": "内联编辑"
     },
     "openChatHotkey": {
-      "name": "打开聊天",
-      "descWithKey": "当前快捷键：{hotkey}",
-      "descNoKey": "未设置快捷键",
-      "btnChange": "更改",
-      "btnSet": "设置快捷键"
+      "name": "打开聊天"
     },
     "newSessionHotkey": {
-      "name": "替换当前会话",
-      "descWithKey": "当前快捷键：{hotkey}",
-      "descNoKey": "未设置快捷键",
-      "btnChange": "更改",
-      "btnSet": "设置快捷键"
+      "name": "替换当前会话"
     },
     "newTabHotkey": {
-      "name": "新建",
-      "descWithKey": "当前快捷键：{hotkey}",
-      "descNoKey": "未设置快捷键",
-      "btnChange": "更改",
-      "btnSet": "设置快捷键"
+      "name": "新建"
     },
     "closeTabHotkey": {
-      "name": "关闭标签页",
-      "descWithKey": "当前快捷键：{hotkey}",
-      "descNoKey": "未设置快捷键",
-      "btnChange": "更改",
-      "btnSet": "设置快捷键"
+      "name": "关闭标签页"
     },
     "slashCommands": {
       "name": "命令与技能",

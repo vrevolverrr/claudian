@@ -126,39 +126,19 @@
     },
     "hotkeys": "Hotkeys",
     "inlineEditHotkey": {
-      "name": "Inline Edit",
-      "descWithKey": "Current hotkey: {hotkey}",
-      "descNoKey": "No hotkey set",
-      "btnChange": "Change",
-      "btnSet": "Set hotkey"
+      "name": "Inline Edit"
     },
     "openChatHotkey": {
-      "name": "Open Chat",
-      "descWithKey": "Current hotkey: {hotkey}",
-      "descNoKey": "No hotkey set",
-      "btnChange": "Change",
-      "btnSet": "Set hotkey"
+      "name": "Open Chat"
     },
     "newSessionHotkey": {
-      "name": "Replace Current Conversation",
-      "descWithKey": "Current hotkey: {hotkey}",
-      "descNoKey": "No hotkey set",
-      "btnChange": "Change",
-      "btnSet": "Set hotkey"
+      "name": "Replace Current Conversation"
     },
     "newTabHotkey": {
-      "name": "New",
-      "descWithKey": "Current hotkey: {hotkey}",
-      "descNoKey": "No hotkey set",
-      "btnChange": "Change",
-      "btnSet": "Set hotkey"
+      "name": "New"
     },
     "closeTabHotkey": {
-      "name": "Close Tab",
-      "descWithKey": "Current hotkey: {hotkey}",
-      "descNoKey": "No hotkey set",
-      "btnChange": "Change",
-      "btnSet": "Set hotkey"
+      "name": "Close Tab"
     },
     "slashCommands": {
       "name": "Commands and Skills",

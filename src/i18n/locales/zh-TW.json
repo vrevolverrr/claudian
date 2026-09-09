@@ -126,39 +126,19 @@
     },
     "hotkeys": "快捷鍵",
     "inlineEditHotkey": {
-      "name": "內嵌編輯",
-      "descWithKey": "目前快捷鍵：{hotkey}",
-      "descNoKey": "未設定快捷鍵",
-      "btnChange": "變更",
-      "btnSet": "設定快捷鍵"
+      "name": "內嵌編輯"
     },
     "openChatHotkey": {
-      "name": "開啟聊天",
-      "descWithKey": "目前快捷鍵：{hotkey}",
-      "descNoKey": "未設定快捷鍵",
-      "btnChange": "變更",
-      "btnSet": "設定快捷鍵"
+      "name": "開啟聊天"
     },
     "newSessionHotkey": {
-      "name": "取代目前對話",
-      "descWithKey": "目前快捷鍵：{hotkey}",
-      "descNoKey": "未設定快捷鍵",
-      "btnChange": "變更",
-      "btnSet": "設定快捷鍵"
+      "name": "取代目前對話"
     },
     "newTabHotkey": {
-      "name": "新增",
-      "descWithKey": "目前快捷鍵：{hotkey}",
-      "descNoKey": "未設定快捷鍵",
-      "btnChange": "變更",
-      "btnSet": "設定快捷鍵"
+      "name": "新增"
     },
     "closeTabHotkey": {
-      "name": "關閉分頁",
-      "descWithKey": "目前快捷鍵：{hotkey}",
-      "descNoKey": "未設定快捷鍵",
-      "btnChange": "變更",
-      "btnSet": "設定快捷鍵"
+      "name": "關閉分頁"
     },
     "slashCommands": {
       "name": "命令與技能",

@@ -126,39 +126,19 @@
     },
     "hotkeys": "Atalhos",
     "inlineEditHotkey": {
-      "name": "Edição em linha",
-      "descWithKey": "Atalho atual: {hotkey}",
-      "descNoKey": "Nenhum atalho definido",
-      "btnChange": "Alterar",
-      "btnSet": "Definir"
+      "name": "Edição em linha"
     },
     "openChatHotkey": {
-      "name": "Abrir chat",
-      "descWithKey": "Atalho atual: {hotkey}",
-      "descNoKey": "Nenhum atalho definido",
-      "btnChange": "Alterar",
-      "btnSet": "Definir"
+      "name": "Abrir chat"
     },
     "newSessionHotkey": {
-      "name": "Substituir conversa atual",
-      "descWithKey": "Atalho atual: {hotkey}",
-      "descNoKey": "Nenhum atalho definido",
-      "btnChange": "Alterar",
-      "btnSet": "Definir"
+      "name": "Substituir conversa atual"
     },
     "newTabHotkey": {
-      "name": "Novo",
-      "descWithKey": "Atalho atual: {hotkey}",
-      "descNoKey": "Nenhum atalho definido",
-      "btnChange": "Alterar",
-      "btnSet": "Definir"
+      "name": "Novo"
     },
     "closeTabHotkey": {
-      "name": "Fechar aba",
-      "descWithKey": "Atalho atual: {hotkey}",
-      "descNoKey": "Nenhum atalho definido",
-      "btnChange": "Alterar",
-      "btnSet": "Definir"
+      "name": "Fechar aba"
     },
     "slashCommands": {
       "name": "Comandos e habilidades",

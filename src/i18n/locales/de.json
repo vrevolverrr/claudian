@@ -126,39 +126,19 @@
     },
     "hotkeys": "Tastenkürzel",
     "inlineEditHotkey": {
-      "name": "Inline-Bearbeitung",
-      "descWithKey": "Aktuelles Tastenkürzel: {hotkey}",
-      "descNoKey": "Kein Tastenkürzel festgelegt",
-      "btnChange": "Ändern",
-      "btnSet": "Festlegen"
+      "name": "Inline-Bearbeitung"
     },
     "openChatHotkey": {
-      "name": "Chat öffnen",
-      "descWithKey": "Aktuelles Tastenkürzel: {hotkey}",
-      "descNoKey": "Kein Tastenkürzel festgelegt",
-      "btnChange": "Ändern",
-      "btnSet": "Festlegen"
+      "name": "Chat öffnen"
     },
     "newSessionHotkey": {
-      "name": "Aktuelle Unterhaltung ersetzen",
-      "descWithKey": "Aktuelles Tastenkürzel: {hotkey}",
-      "descNoKey": "Kein Tastenkürzel festgelegt",
-      "btnChange": "Ändern",
-      "btnSet": "Festlegen"
+      "name": "Aktuelle Unterhaltung ersetzen"
     },
     "newTabHotkey": {
-      "name": "Neu",
-      "descWithKey": "Aktuelles Tastenkürzel: {hotkey}",
-      "descNoKey": "Kein Tastenkürzel festgelegt",
-      "btnChange": "Ändern",
-      "btnSet": "Festlegen"
+      "name": "Neu"
     },
     "closeTabHotkey": {
-      "name": "Tab schließen",
-      "descWithKey": "Aktuelles Tastenkürzel: {hotkey}",
-      "descNoKey": "Kein Tastenkürzel festgelegt",
-      "btnChange": "Ändern",
-      "btnSet": "Festlegen"
+      "name": "Tab schließen"
     },
     "slashCommands": {
       "name": "Befehle und Fähigkeiten",
