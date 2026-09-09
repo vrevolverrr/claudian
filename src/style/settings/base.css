@@ -122,8 +122,7 @@
 /* Custom section descriptions - align with items */
 .claudian-sp-settings-desc,
 .claudian-mcp-settings-desc,
-.claudian-plugin-settings-desc,
-.claudian-approved-desc {
+.claudian-plugin-settings-desc {
   padding: 0 12px;
 }
 
