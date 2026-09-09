@@ -1,9 +1,11 @@
 import type {
   ProviderChatUIConfig,
+  ProviderIconSvg,
   ProviderPermissionModeToggleConfig,
   ProviderReasoningOption,
   ProviderUIOption,
 } from '../../../core/providers/types';
+import { CLAUDE_PROVIDER_ICON, GEMINI_PROVIDER_ICON, OPENAI_PROVIDER_ICON } from '../../../shared/icons';
 import {
   AGY_DEFAULT_CONTEXT_WINDOW,
   type AgyModelFamily,
@@ -17,6 +19,22 @@ import {
   resolveAgyDefaultEffort,
 } from '../models';
 import { getAgyProviderSettings, updateAgyProviderSettings } from '../settings';
+
+/**
+ * agy mixes several underlying model families behind one provider, so a
+ * single provider-wide icon would misrepresent every family but one. Keyed
+ * on the family id's prefix, which survives the version-stripping in
+ * `splitAgyModelVersion` (`gemini-3.1-pro` -> `gemini-pro`).
+ */
+const FAMILY_ICONS_BY_PREFIX: ReadonlyArray<readonly [string, ProviderIconSvg]> = Object.freeze([
+  ['gemini-', GEMINI_PROVIDER_ICON],
+  ['claude-', CLAUDE_PROVIDER_ICON],
+  ['gpt-oss-', OPENAI_PROVIDER_ICON],
+]);
+
+function resolveAgyFamilyIcon(familyId: string): ProviderIconSvg | undefined {
+  return FAMILY_ICONS_BY_PREFIX.find(([prefix]) => familyId.startsWith(prefix))?.[1];
+}
 
 /**
  * Print mode cannot ask for approval, so Safe means "agy denies edits and
@@ -84,6 +102,7 @@ export const agyChatUIConfig: ProviderChatUIConfig = {
   getModelOptions(settings): ProviderUIOption[] {
     return getFamilies(settings).map((family) => ({
       label: family.label,
+      providerIcon: resolveAgyFamilyIcon(family.familyId),
       value: encodeAgyModelId(family.familyId),
     }));
   },

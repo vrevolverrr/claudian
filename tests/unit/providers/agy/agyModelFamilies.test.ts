@@ -139,7 +139,9 @@ describe('agyChatUIConfig model and effort split', () => {
   const settings = settingsWith();
 
   it('lists one entry per family, not per version or effort', () => {
-    expect(agyChatUIConfig.getModelOptions(settings)).toEqual([
+    const options = agyChatUIConfig.getModelOptions(settings)
+      .map(({ label, value }) => ({ label, value }));
+    expect(options).toEqual([
       { label: 'Gemini 3.8 Flash', value: 'agy:gemini-flash' },
       { label: 'Gemini 3.1 Pro', value: 'agy:gemini-pro' },
       { label: 'Claude Sonnet 4.6 (Thinking)', value: 'agy:claude-sonnet' },
