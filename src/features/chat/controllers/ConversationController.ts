@@ -1790,9 +1790,13 @@ export class ConversationController {
     const closeForViewportChange = (): void => {
       if (this.metadataPopoverEl === hoverEl) this.closeSessionMetadataPopover();
     };
+    const closeForExternalScroll = (event: Event): void => {
+      if (event.composedPath().includes(hoverEl)) return;
+      closeForViewportChange();
+    };
     hoverEl.addEventListener('mouseenter', cancelClose);
     hoverEl.addEventListener('mouseleave', scheduleClose);
-    document.addEventListener('scroll', closeForViewportChange, true);
+    document.addEventListener('scroll', closeForExternalScroll, true);
     document.defaultView?.addEventListener('resize', closeForViewportChange);
 
     const signal = options.signal;
@@ -1805,7 +1809,7 @@ export class ConversationController {
     this.metadataPopoverCleanup = () => {
       hoverEl.removeEventListener('mouseenter', cancelClose);
       hoverEl.removeEventListener('mouseleave', scheduleClose);
-      document.removeEventListener('scroll', closeForViewportChange, true);
+      document.removeEventListener('scroll', closeForExternalScroll, true);
       document.defaultView?.removeEventListener('resize', closeForViewportChange);
       signal?.removeEventListener('abort', closeOnAbort);
       if (descriptionTarget.getAttribute('aria-describedby') === popoverId) {
