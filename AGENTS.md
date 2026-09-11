@@ -14,6 +14,23 @@ This repository is a fork of `YishenTu/claudian` (remote `upstream`). It adds `s
 - Fork identity lives in `manifest.json` (`id` is `claudian-agy`) and `package.json` (`name`, `description`, `author`). An upstream merge must not restore upstream's values for those fields.
 - Outside `src/providers/agy/`, prefer changes that stay close to upstream. Every shared file this fork rewrites becomes a merge conflict on the next sync; `src/providers/agy/` has no upstream counterpart and never conflicts.
 
+### Upstream Sync
+
+Upstream work arrives as cherry-picks, so the originals keep their own hashes and `git status` reports `main` as behind upstream even for commits already taken. That count is not a sync signal; compare by content, or by the `cherry picked from commit` trailers already in the log.
+
+This fork keeps five features upstream deleted: Plan Mode, subagent `@mentions`, external-directory `@mentions` (`/add-dir`), Claude bash mode, and the task-list UI. Never take an upstream commit that removes one of them, or that depends on one having been removed. A dependent commit is rarely recognisable from its subject, and three of them applied cleanly before failing:
+
+| Skipped | Why |
+| --- | --- |
+| `3145e468`, `26c9c8b5`, `1f885558`, `9aabd893`, `af3d765b` | Remove the five kept features outright |
+| `8ec857af` | Drops built-in command argument plumbing that `/add-dir` still needs; breaks typecheck |
+| `a08edaf0` | Drops a StatusPanel mock arm that bash mode still needs; fails its own suite |
+| `95c85f2f` | Blocks the native ACP session mode that *is* Grok's and OpenCode's Plan Mode |
+| `0d05dee6` | Removes prompt documentation for the `<context_files>` tag this fork still emits |
+| `5fe30d8d` | Collab-only documentation fix |
+
+Run `npm run typecheck` and the full suite after each batch of cherry-picks rather than only at the end, so a dependent commit is caught next to the commit that introduced it.
+
 ## Scope Guides
 
 - Before editing a scoped area, read its nearest scoped guide:
