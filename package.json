@@ -1,7 +1,7 @@
 {
-  "name": "claudian",
+  "name": "claudian-agy",
   "version": "2.2.5",
-  "description": "Claudian - Claude Code embedded in Obsidian sidebar",
+  "description": "Claudian - fork adding Google's Antigravity CLI as a provider",
   "main": "main.js",
   "engines": {
     "node": ">=24 <25"
@@ -29,12 +29,13 @@
   },
   "keywords": [
     "claude-code",
+    "antigravity",
     "obsidian",
     "obsidian-plugin",
     "productivity",
     "ide"
   ],
-  "author": "Yishen Tu",
+  "author": "Bryan Soong",
   "license": "MIT",
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "^4.7.2",
@@ -44,9 +45,6 @@
     "@types/jest": "^30.0.0",
     "@types/jest-axe": "^3.5.9",
     "@types/node": "^25.5.2",
-    "@types/node-forge": "1.3.14",
-    "@types/sql.js": "1.4.11",
-    "@types/ws": "8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "esbuild": "^0.28.1",
@@ -74,13 +72,9 @@
     "@codemirror/view": "6.38.6",
     "@lezer/markdown": "1.7.2",
     "@modelcontextprotocol/sdk": "~1.30.0",
-    "bonjour-service": "1.4.4",
     "cross-spawn": "7.0.6",
-    "node-forge": "1.4.0",
     "smol-toml": "1.7.1",
-    "sql.js": "1.14.1",
-    "tslib": "^2.8.1",
-    "ws": "8.21.2"
+    "tslib": "^2.8.1"
   },
   "overrides": {
     "@codemirror/state": "$@codemirror/state",

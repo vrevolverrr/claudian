@@ -6,7 +6,6 @@ function createDesktopRuntimeAliases() {
 
   return Object.freeze({
     '@lezer/markdown': path.join(path.dirname(markdownCommonJsEntry), 'index.js'),
-    ws: desktopRequire.resolve('ws'),
   });
 }
 

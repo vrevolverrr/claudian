@@ -2,9 +2,17 @@
 
 ## Project
 
-Claudian is an Obsidian plugin that embeds provider-backed coding agents in a sidebar and inline-edit flow. Claude is the default provider. Codex, Grok, OpenCode, and Pi are optional providers that plug into the same conversation model through `Conversation.providerId` and opaque provider-owned `providerState`.
+Claudian is an Obsidian plugin that embeds provider-backed coding agents in a sidebar and inline-edit flow. Claude is the default provider. agy (Google's Antigravity CLI), Codex, Grok, OpenCode, and Pi are optional providers that plug into the same conversation model through `Conversation.providerId` and opaque provider-owned `providerState`.
 
 Do not assume provider parity. Check each provider's `capabilities.ts`, `registration.ts`, and UI config before wiring shared behavior.
+
+## Fork Status
+
+This repository is a fork of `YishenTu/claudian` (remote `upstream`). It adds `src/providers/agy/` and removes Collab: `src/app/collab/`, `src/core/collab/`, `src/features/collab/`, `src/style/features/collab-*.css`, their tests, and the `@claudian-collab/protocol` dependency are all gone.
+
+- Removing Collab is a standing decision, not unfinished porting. When reconciling with `upstream/main`, drop incoming Collab changes instead of restoring those trees. Reconsider only if this fork takes on multi-user editing, which it has no plan to.
+- Fork identity lives in `manifest.json` (`id` is `claudian-agy`) and `package.json` (`name`, `description`, `author`). An upstream merge must not restore upstream's values for those fields.
+- Outside `src/providers/agy/`, prefer changes that stay close to upstream. Every shared file this fork rewrites becomes a merge conflict on the next sync; `src/providers/agy/` has no upstream counterpart and never conflicts.
 
 ## Scope Guides
 
@@ -109,7 +117,7 @@ Provider-specific session fields belong behind typed helpers in the owning provi
 - Do not use `console.*` in production code.
 - Settings writers must merge rather than replace provider-owned configuration.
 - Put non-committed notes, handoff files, traces, and throwaway scripts in `.context/`.
-- Production bundling Brotli-compresses locale JSON and the canonical `sql.js/dist/sql-wasm.wasm` import through `scripts/compressedStaticAssets.js`. Keep those import paths or update the build round-trip test with the bundler.
+- Production bundling Brotli-compresses `src/i18n/locales/*.json` through `scripts/compressedStaticAssets.js`, matched by a path-shaped esbuild filter. Moving or renaming that directory drops the compression silently rather than failing the build; `npm run build && npm run check:performance` catches it as a `main.js` budget breach.
 
 ## TDD Workflow
 

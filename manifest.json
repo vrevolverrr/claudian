@@ -1,6 +1,6 @@
 {
   "id": "claudian-agy",
-  "name": "Claudian (agy)",
+  "name": "Claudian",
   "version": "2.2.5",
   "minAppVersion": "1.13.0",
   "description": "Fork of Claudian adding Google's Antigravity CLI (agy) as a provider. Embeds Claude Code, Codex, and other coding agents as AI collaborators in your vault. Your vault becomes their working directory, giving them capabilities for file reads and writes, search, bash commands, and multi-step workflows.",

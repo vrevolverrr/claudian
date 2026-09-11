@@ -1,21 +1,19 @@
-# Claudian (agy)
+# Claudian
 
 <p>
   <img src="https://img.shields.io/github/v/release/vrevolverrr/claudian" alt="GitHub release" vspace="10">
   <img src="https://img.shields.io/github/license/vrevolverrr/claudian" alt="License" vspace="10">
 </p>
 
-A fork of [Claudian](https://github.com/YishenTu/claudian) by Yishen Tu, adding
-Google's Antigravity CLI (`agy`) as a provider. Collab mode is removed. It
-installs alongside the original rather than replacing it.
+An Obsidian plugin that embeds AI coding agents (Claude Code, Antigravity, Codex, Grok, Opencode, and Pi) in your vault. Your vault becomes the agent's working directory — file read/write, search, bash, and multi-step workflows all work out of the box.
 
 ![Preview](assets/Preview.png)
 
-An Obsidian plugin that embeds AI coding agents (Claude Code, Codex, Grok, Opencode, Pi, and more to come) in your vault. Your vault becomes the agent's working directory — file read/write, search, bash, and multi-step workflows all work out of the box. Visit [claudian.md](https://claudian.md/) to learn more.
+This is a fork of [Claudian](https://github.com/YishenTu/claudian) by Yishen Tu (see [claudian.md](https://claudian.md/) for the original). It adds Google's Antigravity CLI (`agy`) as a provider and removes Collab mode. It uses its own plugin id (`claudian-agy`), so it installs alongside the original rather than replacing it — both appear as "Claudian" in the plugin list, told apart by their descriptions.
 
 ## Features & Usage
 
-Open the chat sidebar from the ribbon icon or command palette. Select text and use the hotkey for inline edit. Everything works like your familiar coding agent, Claude Code, Codex, Grok, Opencode, and Pi — talk to the agent, and it reads, writes, edits, and searches files in your vault.
+Open the chat sidebar from the ribbon icon or command palette. Select text and use the hotkey for inline edit. Everything works like your familiar coding agent, Claude Code, Antigravity, Codex, Grok, Opencode, and Pi — talk to the agent, and it reads, writes, edits, and searches files in your vault.
 
 **Inline Edit** — Select text or start at the cursor position + hotkey to edit directly in notes with word-level diff preview.
 
@@ -36,6 +34,7 @@ Open the chat sidebar from the ribbon icon or command palette. Select text and u
 
 - At least one of the following harnesses:
   - [Claude Code CLI](https://code.claude.com/docs/en/overview)
+  - [Antigravity CLI](https://antigravity.google/) (`agy`)
   - [Codex CLI](https://github.com/openai/codex)
   - [Grok Build](https://github.com/xai-org/grok-build)
   - [OpenCode](https://github.com/anomalyco/opencode)
@@ -43,34 +42,34 @@ Open the chat sidebar from the ribbon icon or command palette. Select text and u
 - A compatible subscription or API provider, such as [OpenRouter](https://openrouter.ai/docs/guides/guides/claude-code-integration), [Kimi](https://platform.kimi.ai/docs/guide/claude-code-kimi), [GLM](https://docs.z.ai/devpack/tool/claude), or [DeepSeek](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code) etc.
 - Obsidian v1.13.0+
 - Desktop only (macOS, Linux, Windows)
+- Node 24.x, to build the plugin
 
 ## Installation
 
-### From Obsidian Community Plugins (recommended)
+This fork is not in the Obsidian community plugin catalogue and will not be submitted to it — searching "Claudian" there installs the original. Build it from source instead. There is no tagged release yet, so there are no prebuilt files to download.
 
-1. Open Obsidian → Settings → Community plugins → Browse
-2. Search for "Claudian" and click Install
-3. Enable the plugin
-
-Or install directly from the [community plugin page](https://community.obsidian.md/plugins/realclaudian).
-
-### From source (development)
-
-1. Clone this repository into your vault's plugins folder:
+1. Clone the repository anywhere on disk. It does not need to live inside your vault:
    ```bash
-   cd /path/to/vault/.obsidian/plugins
-   git clone https://github.com/vrevolverrr/claudian.git
-   cd claudian
+   git clone https://github.com/vrevolverrr/claudian.git claudian-agy
+   cd claudian-agy
    ```
 
-2. Install dependencies and build:
+2. Point the build at your vault:
+   ```bash
+   echo 'OBSIDIAN_VAULT=/path/to/vault' > .env.local
+   ```
+   `OBSIDIAN_VAULT` also works as an ordinary environment variable if you prefer not to write the file.
+
+3. Install dependencies and build:
    ```bash
    npm install
    npm run build
    ```
+   The build creates `<vault>/.obsidian/plugins/claudian-agy/` and copies `main.js`, `manifest.json`, and `styles.css` into it. The folder is named after the `id` in `manifest.json`, so it never overwrites an existing Claudian install.
 
-3. Enable the plugin in Obsidian:
-   - Settings → Community plugins → Enable "Claudian"
+4. In Obsidian, open Settings → Community plugins, reload the installed plugin list, and enable "Claudian". Both this fork and the original show up under that name; the description tells them apart.
+
+If you skip step 2, `npm run build` still writes `main.js`, `manifest.json`, and `styles.css` to the repository root. Copy those three files into `<vault>/.obsidian/plugins/claudian-agy/` yourself, creating the folder first, then reload Obsidian.
 
 ### Development
 
@@ -82,9 +81,11 @@ npm run dev
 npm run build
 ```
 
+With `OBSIDIAN_VAULT` set, watch mode reinstalls into the vault on every rebuild; use Obsidian's "Reload app without saving" command to pick up the change.
+
 ## Privacy & Data Use
 
-- **Sent to API**: Your input, attached files, images, and tool call outputs. Depending on the selected provider, data is sent to Anthropic (Claude), OpenAI (Codex), xAI (Grok), or the providers configured in OpenCode or Pi. The destination can be configured through provider settings and environment variables.
+- **Sent to API**: Your input, attached files, images, and tool call outputs. Depending on the selected provider, data is sent to Anthropic (Claude), Google (Antigravity), OpenAI (Codex), xAI (Grok), or the providers configured in OpenCode or Pi. The destination can be configured through provider settings and environment variables.
 - **No telemetry or unsolicited background activity**: Claudian does not run telemetry beacons. UI polling timers read local Obsidian/editor selection state only. Network activity is limited to explicit provider runtime work, configured MCP endpoints, provider SDK/CLI calls needed to answer your requests.
 
 ## Troubleshooting
@@ -142,6 +143,7 @@ src/
 │   └── ...                      # commands, prompt, storage, tools, types
 ├── providers/
 │   ├── claude/                  # Claude SDK adaptor, prompt encoding, storage, MCP, plugins
+│   ├── agy/                     # Antigravity CLI adaptor, NDJSON stream mode, model discovery
 │   ├── codex/                   # Codex app-server adaptor, JSON-RPC transport, JSONL history
 │   ├── grok/                    # Grok Build ACP adaptor, native history, models, and tools
 │   ├── opencode/                # Opencode adaptor
