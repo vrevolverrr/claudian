@@ -76,14 +76,6 @@
   display: block;
 }
 
-/* Codex placeholder */
-.claudian-settings-codex-placeholder {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
-}
-
 /* Settings page - remove separator lines from setting items */
 .setting-item.claudian-settings {
   display: block;
