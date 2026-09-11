@@ -44,11 +44,11 @@ export function getBlankTabModelOptions(
 ): ProviderUIOption[] {
   return ProviderRegistry.getEnabledProviderIds(settings).flatMap((providerId) => {
     const uiConfig = ProviderRegistry.getChatUIConfig(providerId);
-    const providerIcon = uiConfig.getProviderIcon?.() ?? undefined;
+    const fallbackIcon = uiConfig.getProviderIcon?.() ?? undefined;
     const group = ProviderRegistry.getProviderDisplayName(providerId);
 
     return uiConfig.getModelOptions(settings)
-      .map(model => ({ ...model, group, providerIcon }));
+      .map(model => ({ ...model, group, providerIcon: model.providerIcon ?? fallbackIcon }));
   });
 }
 
