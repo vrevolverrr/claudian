@@ -354,6 +354,7 @@ export class InputController {
         browserContextOverride: browserContext,
         canvasContextOverride: canvasContext,
       });
+      this.consumeSelections();
       state.queuedMessage = this.mergeQueuedMessages(
         state.queuedMessage,
         this.createQueuedMessage(displayContent, turnRequest),
@@ -418,6 +419,10 @@ export class InputController {
         browserContextOverride: options?.browserContextOverride,
         canvasContextOverride: options?.canvasContextOverride,
       });
+    // A request replayed from the queue already dropped its selections when it was queued.
+    if (!options?.turnRequestOverride) {
+      this.consumeSelections();
+    }
     const { displayContent, turnRequest } = turnSubmission;
     const messagesBeforeTurn = state.messages;
     const hadPendingConversationSave = state.hasPendingConversationSave;
@@ -891,6 +896,7 @@ export class InputController {
     if (imageContextManager && (!options.mergeWithComposer || restoredImages.length > 0)) {
       imageContextManager.setImages(restoredImages);
     }
+    this.restoreSelections(this.toQueuedChatTurn(message).request);
     inputEl.focus();
   }
 
@@ -989,6 +995,19 @@ export class InputController {
 
   private clearDeferredReviewableSettlement(): void {
     this.deferredReviewableSettlement = null;
+  }
+
+  /** Drops just-captured selections from the composer without touching Obsidian's own selection. */
+  private consumeSelections(): void {
+    this.deps.selectionController.consumeSelection();
+    this.deps.browserSelectionController?.consumeSelection();
+    this.deps.canvasSelectionController.consumeSelection();
+  }
+
+  private restoreSelections(request: ChatTurnRequest): void {
+    this.deps.selectionController.restoreSelection(request.editorSelection);
+    this.deps.browserSelectionController?.restoreSelection(request.browserSelection);
+    this.deps.canvasSelectionController.restoreSelection(request.canvasSelection);
   }
 
   private buildTurnSubmission(options: {
@@ -2357,6 +2376,10 @@ function mergeQueuedChatTurns(
       ...cloneChatTurnRequest(incoming.request),
       linkedContentPath:
         incoming.request.linkedContentPath ?? existing.request.linkedContentPath,
+      // The first message consumed its selections, so a later one usually carries none.
+      editorSelection: incoming.request.editorSelection ?? existing.request.editorSelection,
+      browserSelection: incoming.request.browserSelection ?? existing.request.browserSelection,
+      canvasSelection: incoming.request.canvasSelection ?? existing.request.canvasSelection,
       externalContextPaths:
         externalContextPaths.length > 0 ? externalContextPaths : undefined,
       images: images.length > 0 ? images : undefined,

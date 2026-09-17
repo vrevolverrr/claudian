@@ -5,6 +5,7 @@ import type { ProviderExecutionErrorEvent, ProviderExecutionEvent } from '@/core
 import { ProviderRegistry } from '@/core/providers/ProviderRegistry';
 import { ProviderSettingsCoordinator } from '@/core/providers/ProviderSettingsCoordinator';
 import type { ImageAttachment } from '@/core/types';
+import { CanvasSelectionController } from '@/features/chat/controllers/CanvasSelectionController';
 import {
   InputController,
   type InputControllerDeps,
@@ -15,6 +16,7 @@ import {
 } from '@/features/chat/execution/ChatExecutionCoordinator';
 import { ChatState } from '@/features/chat/state/ChatState';
 import type { ComposerInputElement } from '@/shared/composer-dropdown/types';
+import type { CanvasSelectionContext } from '@/utils/canvas';
 
 jest.mock('@/core/providers/ProviderRegistry', () => ({
   ProviderRegistry: {
@@ -162,13 +164,19 @@ function createFixture(overrides: Record<string, unknown> = {}) {
       showThinkingIndicator: jest.fn(),
     },
     selectionController: {
+      consumeSelection: jest.fn(),
       getContext: jest.fn().mockReturnValue(null),
+      restoreSelection: jest.fn(),
     },
     browserSelectionController: {
+      consumeSelection: jest.fn(),
       getContext: jest.fn().mockReturnValue(null),
+      restoreSelection: jest.fn(),
     },
     canvasSelectionController: {
+      consumeSelection: jest.fn(),
       getContext: jest.fn().mockReturnValue(null),
+      restoreSelection: jest.fn(),
     },
     conversationController: {
       clearTerminalSubagentsFromMessages: jest.fn(),
@@ -224,6 +232,146 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     state,
   };
 }
+
+/** A real canvas selection controller over a fake Obsidian workspace with nothing selected. */
+function createCanvasSelection() {
+  const view = {
+    getViewType: () => 'canvas',
+    canvas: { selection: new Set() },
+    file: { path: 'boards/plan.canvas' },
+  };
+  const app = {
+    workspace: {
+      getMostRecentLeaf: () => ({ view }),
+      getLeavesOfType: () => [{ view }],
+    },
+  };
+  const tray = { setItems: jest.fn(), clearItems: jest.fn() };
+  const controller = new CanvasSelectionController(app as any, tray as any, createMockEl());
+  return {
+    controller,
+    select: (context: CanvasSelectionContext) => controller.restoreSelection(context),
+  };
+}
+
+const SENT_NODES: CanvasSelectionContext = { canvasPath: 'boards/plan.canvas', nodeIds: ['n1', 'n2'] };
+const NEWER_NODES: CanvasSelectionContext = { canvasPath: 'boards/plan.canvas', nodeIds: ['n3'] };
+
+describe('InputController selection lifecycle', () => {
+  it('drops the sent canvas selection from the composer', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'hello';
+
+    await fixture.controller.sendMessage();
+
+    expect(canvas.controller.hasSelection()).toBe(false);
+    const submission = fixture.coordinator.execute.mock.calls[0][0] as ChatTurnSubmission;
+    expect(submission.context?.canvasSelection).toEqual(SENT_NODES);
+  });
+
+  it('returns the canvas selection with the text after a definite pre-handoff failure', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'retry this';
+    fixture.coordinator.execute.mockRejectedValueOnce(
+      new ChatExecutionPreHandoffError(new Error('ledger unavailable')),
+    );
+
+    await fixture.controller.sendMessage();
+
+    expect(fixture.input.value).toBe('retry this');
+    expect(canvas.controller.getContext()).toEqual(SENT_NODES);
+  });
+
+  it('returns the canvas selection when execution preparation fails', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({
+      canvasSelectionController: canvas.controller,
+      ensureExecutionInitialized: jest.fn().mockResolvedValue(false),
+    });
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'not sent';
+
+    await fixture.controller.sendMessage();
+
+    expect(fixture.input.value).toBe('not sent');
+    expect(canvas.controller.getContext()).toEqual(SENT_NODES);
+  });
+
+  it('drops the selection at queue time and returns it when the queued message is withdrawn', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    fixture.state.isStreaming = true;
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'queued';
+
+    await fixture.controller.sendMessage();
+    expect(canvas.controller.hasSelection()).toBe(false);
+
+    fixture.controller.withdrawQueuedMessageToComposer();
+
+    expect(fixture.input.value).toBe('queued');
+    expect(canvas.controller.getContext()).toEqual(SENT_NODES);
+  });
+
+  it('keeps the first queued selection when a later queued message has none', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    fixture.state.isStreaming = true;
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'A';
+    await fixture.controller.sendMessage();
+
+    fixture.input.value = 'B';
+    await fixture.controller.sendMessage();
+
+    expect(fixture.state.queuedMessage?.content).toBe('A\n\nB');
+    expect(fixture.state.queuedMessage?.turnRequest?.canvasSelection).toEqual(SENT_NODES);
+  });
+
+  it('leaves a newer selection alone when a queued turn is sent', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    const scheduled: Array<() => void> = [];
+    const timeoutSpy = jest.spyOn(window, 'setTimeout').mockImplementation((callback: any) => {
+      scheduled.push(callback);
+      return scheduled.length as unknown as ReturnType<typeof window.setTimeout>;
+    });
+    fixture.state.queuedMessage = {
+      content: 'queued',
+      editorContext: null,
+      canvasContext: SENT_NODES,
+      turnRequest: { text: 'queued', canvasSelection: SENT_NODES },
+    };
+    canvas.select(NEWER_NODES);
+
+    fixture.controller.resumeQueuedTurnAfterIntentAdmission();
+    scheduled.shift()?.();
+    await waitForCall(fixture.coordinator.execute);
+
+    const submission = fixture.coordinator.execute.mock.calls[0][0] as ChatTurnSubmission;
+    expect(submission.context?.canvasSelection).toEqual(SENT_NODES);
+    expect(canvas.controller.getContext()).toEqual(NEWER_NODES);
+    timeoutSpy.mockRestore();
+  });
+
+  it('returns the queued selection when streaming is cancelled', async () => {
+    const canvas = createCanvasSelection();
+    const fixture = createFixture({ canvasSelectionController: canvas.controller });
+    fixture.state.isStreaming = true;
+    canvas.select(SENT_NODES);
+    fixture.input.value = 'queued';
+    await fixture.controller.sendMessage();
+
+    fixture.controller.cancelStreaming();
+
+    expect(fixture.input.value).toBe('queued');
+    expect(canvas.controller.getContext()).toEqual(SENT_NODES);
+  });
+});
 
 describe('composer wikilinks', () => {
   it('sends exact aliased wikilinks and retains them in displayed messages', async () => {
