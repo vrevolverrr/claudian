@@ -40,6 +40,7 @@ import {
   prepareDisplayOnlyCodeFences,
   restoreDisplayOnlyCodeFences,
 } from './DisplayOnlyCodeFences';
+import { renderSelectionQuotes } from './SelectionQuoteRenderer';
 import { resolveSubagentAdapter } from './subagentAdapterResolution';
 import {
   renderStoredAsyncSubagent,
@@ -228,6 +229,7 @@ export class MessageRenderer {
     const contentEl = msgEl.createDiv({ cls: 'claudian-message-content', attr: { dir: 'auto' } });
 
     if (msg.role === 'user') {
+      renderSelectionQuotes(contentEl, msg.executionInput?.context);
       const textToShow = this.getUserMessageTextToShow(msg);
       if (textToShow) {
         const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
@@ -262,6 +264,7 @@ export class MessageRenderer {
     }
 
     contentEl.empty();
+    renderSelectionQuotes(contentEl, msg.executionInput?.context);
 
     const textToShow = this.getUserMessageTextToShow(msg);
     if (textToShow) {
@@ -367,6 +370,7 @@ export class MessageRenderer {
     const contentEl = msgEl.createDiv({ cls: 'claudian-message-content', attr: { dir: 'auto' } });
 
     if (msg.role === 'user') {
+      renderSelectionQuotes(contentEl, msg.executionInput?.context);
       const textToShow = this.getUserMessageTextToShow(msg);
       if (textToShow) {
         const textEl = contentEl.createDiv({ cls: 'claudian-text-block' });
