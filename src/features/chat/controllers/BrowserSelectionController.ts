@@ -16,6 +16,7 @@ export class BrowserSelectionController {
   private onVisibilityChange: (() => void) | null;
   private onUserSelectionChanged: (() => void) | null;
   private storedSelection: BrowserSelectionContext | null = null;
+  private consumedSelection: BrowserSelectionContext | null = null;
   private pollInterval: number | null = null;
   private pollInFlight = false;
 
@@ -61,12 +62,18 @@ export class BrowserSelectionController {
       const selectedText = await this.extractSelectedText(browserView.containerEl);
       if (selectedText) {
         const nextContext = this.buildContext(browserView.view, browserView.viewType, browserView.containerEl, selectedText);
+        if (this.isSameSelection(nextContext, this.consumedSelection)) return;
+        this.consumedSelection = null;
         if (!this.isSameSelection(nextContext, this.storedSelection)) {
           this.storedSelection = nextContext;
           this.updateIndicator();
           this.onUserSelectionChanged?.();
         }
       } else {
+        const { source } = this.buildContext(browserView.view, browserView.viewType, browserView.containerEl, '');
+        if (this.consumedSelection?.source === source) {
+          this.consumedSelection = null;
+        }
         this.clearWhenInputIsNotFocused();
       }
     } catch {
@@ -256,7 +263,7 @@ export class BrowserSelectionController {
         icon: 'globe',
         ariaLabel: label,
         onRemove: () => {
-          this.clear();
+          this.consumeSelection();
           this.onUserSelectionChanged?.();
         },
       }]);
@@ -276,6 +283,21 @@ export class BrowserSelectionController {
 
   hasSelection(): boolean {
     return this.storedSelection !== null;
+  }
+
+  /** Drops the current selection from the chat and ignores it until it changes on the page. */
+  consumeSelection(): void {
+    if (!this.storedSelection) return;
+    this.consumedSelection = this.storedSelection;
+    this.clear();
+  }
+
+  /** Puts a sent selection back in the composer unless a newer one was captured since. */
+  restoreSelection(context: BrowserSelectionContext | null | undefined): void {
+    if (this.storedSelection || !context?.selectedText.trim()) return;
+    this.consumedSelection = null;
+    this.storedSelection = { ...context };
+    this.updateIndicator();
   }
 
   clear(): void {

@@ -194,4 +194,75 @@ describe('CanvasSelectionController', () => {
     expect(controller.hasSelection()).toBe(false);
     expect(contextTray.clearItems).toHaveBeenCalledWith('canvas-selection');
   });
+
+  describe('consumed selections', () => {
+    function captureSelection() {
+      controller.start();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(true);
+    }
+
+    it('does not re-capture consumed canvas nodes', () => {
+      captureSelection();
+
+      controller.consumeSelection();
+      expect(controller.hasSelection()).toBe(false);
+      expect(contextTray.clearItems).toHaveBeenCalledWith('canvas-selection');
+      jest.advanceTimersByTime(500);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures again after the canvas selection is cleared and reselected', () => {
+      captureSelection();
+      const selectedNodes = canvasView.canvas.selection;
+      controller.consumeSelection();
+
+      canvasView.canvas.selection = new Set();
+      jest.advanceTimersByTime(250);
+      canvasView.canvas.selection = selectedNodes;
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toEqual({
+        canvasPath: 'my-canvas.canvas',
+        nodeIds: ['abc123', 'def456'],
+      });
+    });
+
+    it('keeps still-selected nodes out of the composer after tray remove', () => {
+      captureSelection();
+
+      contextTray.setItems.mock.calls.at(-1)![1][0].onRemove();
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('restores consumed canvas nodes', () => {
+      captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()).toEqual(sent);
+      expect(contextTray.setItems).toHaveBeenLastCalledWith('canvas-selection', [
+        expect.objectContaining({ label: '2 nodes selected' }),
+      ]);
+      jest.advanceTimersByTime(250);
+      expect(controller.getContext()).toEqual(sent);
+    });
+
+    it('does not replace a newer canvas selection when restoring', () => {
+      captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+      canvasView.canvas.selection = new Set([createMockCanvasNode('newer')]);
+      jest.advanceTimersByTime(250);
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()?.nodeIds).toEqual(['newer']);
+    });
+  });
 });

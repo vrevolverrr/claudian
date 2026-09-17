@@ -146,6 +146,79 @@ describe('BrowserSelectionController', () => {
     expect(contextTray.clearItems).toHaveBeenCalledWith('browser-selection');
   });
 
+  describe('consumed selections', () => {
+    async function poll(): Promise<void> {
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+    }
+
+    async function captureSelection(): Promise<void> {
+      controller.start();
+      await poll();
+      expect(controller.hasSelection()).toBe(true);
+    }
+
+    it('does not re-capture a consumed browser selection', async () => {
+      await captureSelection();
+
+      controller.consumeSelection();
+      expect(controller.hasSelection()).toBe(false);
+      expect(contextTray.clearItems).toHaveBeenCalledWith('browser-selection');
+      await poll();
+      await poll();
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures again after the page selection is cleared and reselected', async () => {
+      await captureSelection();
+      controller.consumeSelection();
+
+      selectionText = '';
+      await poll();
+      selectionText = 'selected web snippet';
+      await poll();
+
+      expect(controller.getContext()?.selectedText).toBe('selected web snippet');
+    });
+
+    it('keeps a still-selected page out of the composer after tray remove', async () => {
+      await captureSelection();
+
+      contextTray.setItems.mock.calls.at(-1)![1][0].onRemove();
+      await poll();
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('restores a consumed browser selection', async () => {
+      await captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()).toEqual(sent);
+      expect(contextTray.setItems).toHaveBeenLastCalledWith('browser-selection', [
+        expect.objectContaining({ label: '1 line selected' }),
+      ]);
+      await poll();
+      expect(controller.getContext()).toEqual(sent);
+    });
+
+    it('does not replace a newer browser selection when restoring', async () => {
+      await captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+      selectionText = 'newer snippet';
+      await poll();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()?.selectedText).toBe('newer snippet');
+    });
+  });
+
   it('handles polling errors without unhandled rejection', async () => {
     const extractSpy = jest.spyOn(controller as any, 'extractSelectedText')
       .mockRejectedValueOnce(new Error('poll failed'));
