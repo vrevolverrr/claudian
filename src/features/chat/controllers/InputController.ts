@@ -2,6 +2,7 @@ import { Notice, setIcon } from 'obsidian';
 
 import type { ComposerInputElement } from '@/shared/composer-dropdown/types';
 
+import { CONVERSATION_INPUT_LEDGER_SCHEMA_VERSION } from '../../../core/bootstrap/ConversationInputLedgerStorage';
 import {
   type BuiltInCommand,
   detectBuiltInCommand,
@@ -21,6 +22,8 @@ import { TOOL_EXIT_PLAN_MODE } from '../../../core/tools/toolNames';
 import {
   type ApprovalDecision,
   type ChatMessage,
+  type ExecutionInputContextSnapshot,
+  type ExecutionInputSnapshot,
   type ExitPlanModeDecision,
   type ExitPlanModePresentationOptions,
   isCanonicalUserMessage,
@@ -161,6 +164,7 @@ interface PendingProviderUserMessage {
   persistedContent?: string;
   linkedContentPath?: string;
   images?: ChatMessage['images'];
+  executionInput?: ExecutionInputSnapshot;
 }
 
 type PendingSteerProviderDisposition =
@@ -427,6 +431,7 @@ export class InputController {
     const messagesBeforeTurn = state.messages;
     const hadPendingConversationSave = state.hasPendingConversationSave;
 
+    const selectionInput = toSelectionInputSnapshot(turnRequest);
     const userMsg: ChatMessage = {
       id: this.deps.generateId(),
       role: 'user',
@@ -434,6 +439,7 @@ export class InputController {
       displayContent,                // Original user input (for UI display)
       timestamp: Date.now(),
       images: imagesForMessage,
+      ...(selectionInput ? { executionInput: selectionInput } : {}),
     };
     state.addMessage(userMsg);
     state.hasPendingConversationSave = true;
@@ -1403,6 +1409,7 @@ export class InputController {
           ? undefined
           : request.linkedContentPath,
         images: request.images,
+        executionInput: toSelectionInputSnapshot(request),
       },
       inputRecordId: submission.inputRecordId,
       message: queuedMessage,
@@ -1535,6 +1542,7 @@ export class InputController {
         timestamp: Date.now(),
         linkedContentPath: expected?.linkedContentPath,
         images,
+        ...(expected?.executionInput ? { executionInput: expected.executionInput } : {}),
         ...(chunk.itemId ? { userMessageId: chunk.itemId } : {}),
       };
       this.deps.state.addMessage(userMessage);
@@ -2352,6 +2360,21 @@ function cloneChatTurnRequest(request: ChatTurnRequest): ChatTurnRequest {
       ? [...request.externalContextPaths]
       : undefined,
     images: request.images ? [...request.images] : undefined,
+  };
+}
+
+/** The selections a user message carried, in the shape the input ledger records for it. */
+function toSelectionInputSnapshot(request: ChatTurnRequest): ExecutionInputSnapshot | undefined {
+  const context: ExecutionInputContextSnapshot = {
+    ...(request.editorSelection ? { editorSelection: request.editorSelection } : {}),
+    ...(request.browserSelection ? { browserSelection: request.browserSelection } : {}),
+    ...(request.canvasSelection ? { canvasSelection: request.canvasSelection } : {}),
+  };
+  if (Object.keys(context).length === 0) return undefined;
+  return {
+    schemaVersion: CONVERSATION_INPUT_LEDGER_SCHEMA_VERSION,
+    canonicalText: request.text,
+    context,
   };
 }
 

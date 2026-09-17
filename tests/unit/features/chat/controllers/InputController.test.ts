@@ -358,6 +358,74 @@ describe('InputController selection lifecycle', () => {
     timeoutSpy.mockRestore();
   });
 
+  it('attaches the sent selections to the live user message', async () => {
+    const fixture = createFixture();
+    const editorSelection = {
+      mode: 'selection' as const,
+      notePath: 'Notes/foo.md',
+      selectedText: 'quoted',
+      lineCount: 1,
+      startLine: 3,
+    };
+    const browserSelection = {
+      source: 'browser:https://example.com',
+      selectedText: 'web',
+      url: 'https://example.com',
+    };
+
+    await fixture.controller.sendMessage({
+      content: 'about this',
+      editorContextOverride: editorSelection,
+      browserContextOverride: browserSelection,
+      canvasContextOverride: SENT_NODES,
+    });
+
+    expect(fixture.state.messages.find(message => message.role === 'user')?.executionInput).toEqual({
+      schemaVersion: 1,
+      canonicalText: 'about this',
+      context: { editorSelection, browserSelection, canvasSelection: SENT_NODES },
+    });
+  });
+
+  it('attaches the steered selection to the provider-echo bubble', async () => {
+    const fixture = createFixture();
+    const mainResult = deferred<{
+      accepted: boolean;
+      planCompleted: boolean;
+      status: 'completed';
+    }>();
+    fixture.coordinator.execute.mockReturnValueOnce(mainResult.promise);
+    fixture.input.value = 'main turn';
+    const mainTurn = fixture.controller.sendMessage();
+    await waitForCall(fixture.coordinator.execute);
+    await fixture.controller.handleExecutionEvent(requestedUserMessageStarted('main turn', 1));
+
+    const editorSelection = {
+      mode: 'selection' as const,
+      notePath: 'Notes/foo.md',
+      selectedText: 'steer quote',
+      lineCount: 1,
+      startLine: 8,
+    };
+    (fixture.deps.selectionController.getContext as jest.Mock).mockReturnValue(editorSelection);
+    fixture.input.value = 'steer with quote';
+    await fixture.controller.sendMessage();
+    await (fixture.controller as any).steerQueuedMessage();
+    await fixture.controller.handleExecutionEvent(requestedUserMessageStarted('steer with quote', 2));
+
+    expect(fixture.state.messages.filter(message => message.role === 'user').at(-1)).toMatchObject({
+      displayContent: 'steer with quote',
+      executionInput: {
+        schemaVersion: 1,
+        canonicalText: 'steer with quote',
+        context: { editorSelection },
+      },
+    });
+
+    mainResult.resolve({ accepted: true, planCompleted: false, status: 'completed' });
+    await mainTurn;
+  });
+
   it('returns the queued selection when streaming is cancelled', async () => {
     const canvas = createCanvasSelection();
     const fixture = createFixture({ canvasSelectionController: canvas.controller });
