@@ -460,6 +460,26 @@ describe('SelectionController', () => {
       expect(controller.hasSelection()).toBe(false);
     });
 
+    it('does not bring back a sent selection after selecting in another note', () => {
+      captureSelection();
+      const originalView = app.workspace.getActiveViewOfType();
+      controller.consumeSelection();
+
+      const otherEditorView = { ...editorView, id: 'other-editor-view', dom: createMockEventTarget() };
+      app.workspace.getActiveViewOfType.mockReturnValue({
+        editor: { ...editor, getSelection: jest.fn().mockReturnValue('other note text'), cm: otherEditorView },
+        getMode: () => 'source',
+        file: { path: 'notes/other.md' },
+      });
+      jest.advanceTimersByTime(250);
+      expect(controller.getContext()?.selectedText).toBe('other note text');
+
+      app.workspace.getActiveViewOfType.mockReturnValue(originalView);
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toBeNull();
+    });
+
     it('keeps a still-selected source range out of the composer after tray remove', () => {
       captureSelection();
 

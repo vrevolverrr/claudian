@@ -22,6 +22,7 @@ describe('BrowserSelectionController', () => {
   let containerEl: HTMLElement;
   let selectionText = 'selected web snippet';
   let getSelectionSpy: jest.SpyInstance;
+  let browserView: { currentUrl: string };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -46,6 +47,7 @@ describe('BrowserSelectionController', () => {
       containerEl,
       currentUrl: 'https://example.com',
     };
+    browserView = view;
 
     app = {
       workspace: {
@@ -180,6 +182,22 @@ describe('BrowserSelectionController', () => {
       await poll();
 
       expect(controller.getContext()?.selectedText).toBe('selected web snippet');
+    });
+
+    it('does not bring back a sent selection after selecting on another page', async () => {
+      await captureSelection();
+      controller.consumeSelection();
+
+      browserView.currentUrl = 'https://other.example';
+      selectionText = 'other page text';
+      await poll();
+      expect(controller.getContext()?.selectedText).toBe('other page text');
+
+      browserView.currentUrl = 'https://example.com';
+      selectionText = 'selected web snippet';
+      await poll();
+
+      expect(controller.getContext()).toBeNull();
     });
 
     it('keeps a still-selected page out of the composer after tray remove', async () => {

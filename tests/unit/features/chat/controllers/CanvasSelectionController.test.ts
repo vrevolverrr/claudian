@@ -229,6 +229,23 @@ describe('CanvasSelectionController', () => {
       });
     });
 
+    it('does not bring back sent nodes after selecting on another canvas', () => {
+      captureSelection();
+      const selectedNodes = canvasView.canvas.selection;
+      controller.consumeSelection();
+
+      canvasView.file = { path: 'other.canvas' };
+      canvasView.canvas.selection = new Set([createMockCanvasNode('other-node')]);
+      jest.advanceTimersByTime(250);
+      expect(controller.getContext()?.canvasPath).toBe('other.canvas');
+
+      canvasView.file = { path: 'my-canvas.canvas' };
+      canvasView.canvas.selection = selectedNodes;
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toBeNull();
+    });
+
     it('keeps still-selected nodes out of the composer after tray remove', () => {
       captureSelection();
 

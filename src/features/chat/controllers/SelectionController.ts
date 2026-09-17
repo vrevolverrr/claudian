@@ -5,6 +5,7 @@ import { hideSelectionHighlight, showSelectionHighlight } from '../../../shared/
 import { type EditorSelectionContext, getEditorView } from '../../../utils/editor';
 import type { StoredSelection } from '../state/types';
 import type { ComposerContextTray } from '../ui/ComposerContextTray';
+import { ConsumedSelections } from './ConsumedSelections';
 
 const SELECTION_POLL_INTERVAL = 250;
 const INPUT_HANDOFF_GRACE_MS = 1500;
@@ -31,7 +32,10 @@ export class SelectionController {
   private onUserSelectionChanged: (() => void) | null;
   private owningLeaf: WorkspaceLeaf | null;
   private storedSelection: StoredSelection | null = null;
-  private consumedSelection: StoredSelection | null = null;
+  private readonly consumed = new ConsumedSelections<StoredSelection>(
+    selection => selection.editorView ?? selection.notePath,
+    (left, right) => this.isSameStoredSelection(left, right),
+  );
   private inputHandoffGraceUntil: number | null = null;
   private pollInterval: number | null = null;
   private readonly focusScopePointerDownHandler = () => {
@@ -137,8 +141,10 @@ export class SelectionController {
       const notePath = view.file?.path || 'unknown';
       const lineCount = selectedText.split(/\r?\n/).length;
 
-      if (this.isConsumed({ notePath, selectedText, lineCount, startLine, from, to, editorView })) return;
-      this.consumedSelection = null;
+      if (this.consumed.isConsumed({ notePath, selectedText, lineCount, startLine, from, to, editorView })) {
+        this.handleDeselection();
+        return;
+      }
 
       const s = this.storedSelection;
       const sameRange = s
@@ -160,9 +166,7 @@ export class SelectionController {
         this.onUserSelectionChanged?.();
       }
     } else {
-      if (this.consumedSelection?.editorView === editorView) {
-        this.consumedSelection = null;
-      }
+      this.consumed.release(editorView);
       this.handleDeselection();
     }
   }
@@ -204,7 +208,7 @@ export class SelectionController {
         (!anchorNode || !containerEl.contains(anchorNode))
         && (!focusNode || !containerEl.contains(focusNode))
       ) {
-        this.releaseConsumedDocumentSelection(notePath);
+        this.consumed.release(notePath);
         this.handleDeselection();
         return;
       }
@@ -213,8 +217,10 @@ export class SelectionController {
       const lineCount = selectedText.split(/\r?\n/).length;
       const domRanges = this.cloneDOMRanges(selection);
 
-      if (this.isConsumed({ notePath, selectedText, lineCount, domRanges })) return;
-      this.consumedSelection = null;
+      if (this.consumed.isConsumed({ notePath, selectedText, lineCount, domRanges })) {
+        this.handleDeselection();
+        return;
+      }
 
       const unchanged = this.storedSelection
         && this.storedSelection.editorView === undefined
@@ -230,16 +236,8 @@ export class SelectionController {
         this.onUserSelectionChanged?.();
       }
     } else {
-      this.releaseConsumedDocumentSelection(notePath);
+      this.consumed.release(notePath);
       this.handleDeselection();
-    }
-  }
-
-  /** A reading-mode or PDF selection counts as gone only once its own document shows none. */
-  private releaseConsumedDocumentSelection(notePath: string): void {
-    const consumed = this.consumedSelection;
-    if (consumed && !consumed.editorView && consumed.notePath === notePath) {
-      this.consumedSelection = null;
     }
   }
 
@@ -487,20 +485,17 @@ export class SelectionController {
   /** Drops the current selection from the chat and ignores it until it changes in Obsidian. */
   consumeSelection(): void {
     if (!this.storedSelection) return;
-    this.consumedSelection = this.storedSelection;
+    this.consumed.remember(this.storedSelection);
     this.clear();
   }
 
   /** Puts a sent selection back in the composer unless a newer one was captured since. */
   restoreSelection(context: EditorSelectionContext | null | undefined): void {
     if (this.storedSelection || context?.mode !== 'selection' || !context.selectedText) return;
-    const consumed = this.consumedSelection;
-    this.consumedSelection = null;
-    this.storedSelection = consumed
-      && consumed.notePath === context.notePath
-      && consumed.selectedText === context.selectedText
-      ? consumed
-      : {
+    const consumed = this.consumed.take(selection => (
+      selection.notePath === context.notePath && selection.selectedText === context.selectedText
+    ));
+    this.storedSelection = consumed ?? {
         notePath: context.notePath,
         selectedText: context.selectedText,
         lineCount: context.lineCount ?? context.selectedText.split(/\r?\n/).length,
@@ -510,21 +505,16 @@ export class SelectionController {
     this.showHighlight();
   }
 
-  private isConsumed(candidate: StoredSelection): boolean {
-    const consumed = this.consumedSelection;
-    if (
-      !consumed
-      || consumed.notePath !== candidate.notePath
-      || consumed.selectedText !== candidate.selectedText
-    ) {
+  private isSameStoredSelection(left: StoredSelection, right: StoredSelection): boolean {
+    if (left.notePath !== right.notePath || left.selectedText !== right.selectedText) {
       return false;
     }
-    if (consumed.editorView || candidate.editorView) {
-      return consumed.editorView === candidate.editorView
-        && consumed.from === candidate.from
-        && consumed.to === candidate.to;
+    if (left.editorView || right.editorView) {
+      return left.editorView === right.editorView
+        && left.from === right.from
+        && left.to === right.to;
     }
-    return this.rangeListsMatch(consumed.domRanges, candidate.domRanges ?? []);
+    return this.rangeListsMatch(left.domRanges, right.domRanges ?? []);
   }
 
   // ============================================
