@@ -303,6 +303,10 @@
   border-end-end-radius: 4px;
 }
 
+.theme-light .claudian-message-user > .claudian-message-content {
+  background: #f0efed;
+}
+
 .claudian-message-user ol > li::marker {
   color: inherit;
 }
