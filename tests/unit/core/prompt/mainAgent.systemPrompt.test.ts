@@ -29,7 +29,7 @@ describe('systemPrompt', () => {
 
       expect(prompt).not.toContain('## User Context');
       expect(prompt).toContain(
-        "You are Claudian, operating inside **Alice**'s Obsidian Vault. The current working directory is the Vault root.",
+        "You are a coding agent embedded in Obsidian, operating within **Alice**'s Vault. The current working directory is the Vault root.",
       );
       expect(prompt).toContain('## Runtime Context');
       expect(prompt).toContain('Vault absolute path: /vault');
@@ -152,29 +152,29 @@ describe('systemPrompt', () => {
       expect(prompt).toContain('## Runtime Context');
       expect(prompt).not.toContain('## User Context');
       expect(prompt).toContain(
-        "You are Claudian, operating inside **Alice**'s Obsidian Vault. The current working directory is the Vault root.",
+        "You are a coding agent embedded in Obsidian, operating within **Alice**'s Vault. The current working directory is the Vault root.",
       );
       expect(prompt).not.toContain('You are collaborating with');
     });
 
     it('should use the generic user when userName is empty', () => {
       const prompt = buildSystemPrompt({ userName: '' });
-      expect(prompt).toContain("operating inside the user's Obsidian Vault.");
+      expect(prompt).toContain("operating within the user's Vault.");
     });
 
     it('should use the generic user when userName is whitespace only', () => {
       const prompt = buildSystemPrompt({ userName: '   ' });
-      expect(prompt).toContain("operating inside the user's Obsidian Vault.");
+      expect(prompt).toContain("operating within the user's Vault.");
     });
 
     it('should use the generic user when userName is undefined', () => {
       const prompt = buildSystemPrompt({});
-      expect(prompt).toContain("operating inside the user's Obsidian Vault.");
+      expect(prompt).toContain("operating within the user's Vault.");
     });
 
     it('should trim whitespace from userName', () => {
       const prompt = buildSystemPrompt({ userName: '  Bob  ' });
-      expect(prompt).toContain("operating inside **Bob**'s Obsidian Vault.");
+      expect(prompt).toContain("operating within **Bob**'s Vault.");
       expect(prompt).not.toContain('**  Bob  **');
     });
   });

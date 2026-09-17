@@ -16,7 +16,7 @@ function getRuntimeContext(
   const trimmedUserName = userName?.trim();
   const vaultOwner = trimmedUserName ? `**${trimmedUserName}**'s` : "the user's";
   const lines = [
-    `You are Claudian, operating inside ${vaultOwner} Obsidian Vault. The current working directory is the Vault root.`,
+    `You are a coding agent embedded in Obsidian, operating within ${vaultOwner} Vault. The current working directory is the Vault root.`,
   ];
   if (vaultPath) {
     lines.push(`Vault absolute path: ${vaultPath}`);

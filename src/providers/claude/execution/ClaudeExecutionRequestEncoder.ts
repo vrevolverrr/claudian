@@ -131,7 +131,8 @@ export class ClaudeExecutionRequestEncoder {
     );
     const prompt = this.encodePrompt(request, replayConversationHistory);
     const policy = resolveToolPolicy(request);
-    const systemPrompt = request.configuration.systemInstructions.kind === 'explicit'
+    const isExplicitSystemInstructions = request.configuration.systemInstructions.kind === 'explicit';
+    const systemPrompt = isExplicitSystemInstructions
       ? [
         request.configuration.systemInstructions.instructions.trim(),
         EXPLICIT_PROTOCOL_INSTRUCTIONS,
@@ -146,13 +147,18 @@ export class ClaudeExecutionRequestEncoder {
           ? [...request.configuration.systemInstructions.dynamicSections]
           : undefined,
       });
+    // Preserve Claude Code's own default system prompt for main chat and append
+    // Claudian's Vault context on top, instead of replacing it outright.
+    const sdkSystemPrompt: Options['systemPrompt'] = isExplicitSystemInstructions
+      ? systemPrompt
+      : { type: 'preset', preset: 'claude_code', append: systemPrompt };
     const externalPaths = uniqueStrings([
       ...(request.context?.externalContextPaths ?? []),
       ...(request.configuration.externalWorkspaceRoots ?? []),
     ]);
     const options: Options = {
       cwd: sessionConfig.vaultWorkingDirectory,
-      systemPrompt,
+      systemPrompt: sdkSystemPrompt,
       model,
       effort,
       thinking: { type: 'adaptive' },

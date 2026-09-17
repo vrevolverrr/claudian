@@ -17,7 +17,7 @@ describe('Grok system prompt', () => {
     const prompt = buildGrokSystemPrompt(promptSettings);
 
     expect(prompt).toBe(buildSystemPrompt(promptSettings));
-    expect(prompt).toContain("inside **Ada**'s Obsidian Vault");
+    expect(prompt).toContain("within **Ada**'s Vault");
     expect(prompt).toContain('Vault absolute path: /vault');
     expect(prompt).toContain('Keep my explicit instructions.');
     expect(prompt).toContain('bash: date');

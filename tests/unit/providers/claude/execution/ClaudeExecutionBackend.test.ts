@@ -433,10 +433,15 @@ describe('ClaudeExecutionBackend', () => {
       },
     })).events);
 
-    const systemPrompt = String(sdkMock.getLastOptions()?.systemPrompt);
-    expect(systemPrompt).toContain('## Runtime Context');
-    expect(systemPrompt).toContain('## Collab Mode\nRuntime guidance.');
-    expect(systemPrompt.match(/## Collab Mode/g)).toHaveLength(1);
+    const systemPrompt = sdkMock.getLastOptions()?.systemPrompt;
+    expect(systemPrompt).toEqual(expect.objectContaining({
+      type: 'preset',
+      preset: 'claude_code',
+    }));
+    const appended = (systemPrompt as { append?: string })?.append ?? '';
+    expect(appended).toContain('## Runtime Context');
+    expect(appended).toContain('## Collab Mode\nRuntime guidance.');
+    expect(appended.match(/## Collab Mode/g)).toHaveLength(1);
   });
 
   it('encodes structured context with escaped XML paths and bodies', async () => {
