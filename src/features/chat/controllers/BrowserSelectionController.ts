@@ -2,6 +2,7 @@ import type { App, ItemView } from 'obsidian';
 
 import type { BrowserSelectionContext } from '../../../utils/browser';
 import type { ComposerContextTray } from '../ui/ComposerContextTray';
+import { ConsumedSelections } from './ConsumedSelections';
 
 const BROWSER_SELECTION_POLL_INTERVAL = 250;
 
@@ -16,6 +17,10 @@ export class BrowserSelectionController {
   private onVisibilityChange: (() => void) | null;
   private onUserSelectionChanged: (() => void) | null;
   private storedSelection: BrowserSelectionContext | null = null;
+  private readonly consumed = new ConsumedSelections<BrowserSelectionContext>(
+    selection => selection.source,
+    (left, right) => this.isSameSelection(left, right),
+  );
   private pollInterval: number | null = null;
   private pollInFlight = false;
 
@@ -58,15 +63,21 @@ export class BrowserSelectionController {
         return;
       }
 
-      const selectedText = await this.extractSelectedText(browserView.containerEl);
+      const selectedText = await this.extractSelectedText(browserView.containerEl, browserView.isBrowserView);
       if (selectedText) {
         const nextContext = this.buildContext(browserView.view, browserView.viewType, browserView.containerEl, selectedText);
+        if (this.consumed.isConsumed(nextContext)) {
+          this.clearWhenInputIsNotFocused();
+          return;
+        }
         if (!this.isSameSelection(nextContext, this.storedSelection)) {
           this.storedSelection = nextContext;
           this.updateIndicator();
           this.onUserSelectionChanged?.();
         }
       } else {
+        const { source } = this.buildContext(browserView.view, browserView.viewType, browserView.containerEl, '');
+        this.consumed.release(source);
         this.clearWhenInputIsNotFocused();
       }
     } catch {
@@ -76,35 +87,37 @@ export class BrowserSelectionController {
     }
   }
 
-  private getActiveBrowserView(): { view: ItemView; viewType: string; containerEl: HTMLElement } | null {
+  private getActiveBrowserView(): {
+    view: ItemView;
+    viewType: string;
+    containerEl: HTMLElement;
+    isBrowserView: boolean;
+  } | null {
     const activeLeaf = this.app.workspace.getMostRecentLeaf?.();
     const activeView = activeLeaf?.view as ItemView | undefined;
     const containerEl = (activeView as unknown as { containerEl?: HTMLElement }).containerEl;
     if (!activeView || !containerEl) return null;
 
     const viewType = activeView.getViewType?.() ?? '';
-    if (!this.isBrowserLikeView(viewType, containerEl)) return null;
+    const isBrowserView = this.isBrowserViewType(viewType);
+    if (!isBrowserView && !containerEl.querySelector('iframe, webview')) return null;
 
-    return { view: activeView, viewType, containerEl };
+    return { view: activeView, viewType, containerEl, isBrowserView };
   }
 
-  private isBrowserLikeView(viewType: string, containerEl: HTMLElement): boolean {
+  private isBrowserViewType(viewType: string): boolean {
     const normalized = viewType.toLowerCase();
-    if (
-      normalized.includes('surfing')
+    return normalized.includes('surfing')
       || normalized.includes('browser')
-      || normalized.includes('webview')
-    ) {
-      return true;
-    }
-
-    return Boolean(containerEl.querySelector('iframe, webview'));
+      || normalized.includes('webview');
   }
 
-  private async extractSelectedText(containerEl: HTMLElement): Promise<string | null> {
-    const ownerDoc = containerEl.ownerDocument;
-    const docSelection = this.extractSelectionFromDocument(ownerDoc, containerEl);
-    if (docSelection) return docSelection;
+  /** A non-browser view hosting a frame (a note embedding HTML) owns its own text; only the frame counts. */
+  private async extractSelectedText(containerEl: HTMLElement, isBrowserView: boolean): Promise<string | null> {
+    if (isBrowserView) {
+      const docSelection = this.extractSelectionFromDocument(containerEl.ownerDocument, containerEl);
+      if (docSelection) return docSelection;
+    }
 
     const frameSelection = this.extractSelectionFromIframes(containerEl);
     if (frameSelection) return frameSelection;
@@ -256,7 +269,7 @@ export class BrowserSelectionController {
         icon: 'globe',
         ariaLabel: label,
         onRemove: () => {
-          this.clear();
+          this.consumeSelection();
           this.onUserSelectionChanged?.();
         },
       }]);
@@ -276,6 +289,21 @@ export class BrowserSelectionController {
 
   hasSelection(): boolean {
     return this.storedSelection !== null;
+  }
+
+  /** Drops the current selection from the chat and ignores it until it changes on the page. */
+  consumeSelection(): void {
+    if (!this.storedSelection) return;
+    this.consumed.remember(this.storedSelection);
+    this.clear();
+  }
+
+  /** Puts a sent selection back in the composer unless a newer one was captured since. */
+  restoreSelection(context: BrowserSelectionContext | null | undefined): void {
+    if (this.storedSelection || !context?.selectedText.trim()) return;
+    this.consumed.release(context.source);
+    this.storedSelection = { ...context };
+    this.updateIndicator();
   }
 
   clear(): void {

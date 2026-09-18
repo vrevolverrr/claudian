@@ -2,6 +2,7 @@ import type { App, ItemView } from 'obsidian';
 
 import type { CanvasSelectionContext } from '../../../utils/canvas';
 import type { ComposerContextTray } from '../ui/ComposerContextTray';
+import { ConsumedSelections } from './ConsumedSelections';
 
 const CANVAS_POLL_INTERVAL = 250;
 
@@ -23,6 +24,10 @@ export class CanvasSelectionController {
   private onVisibilityChange: (() => void) | null;
   private onUserSelectionChanged: (() => void) | null;
   private storedSelection: CanvasSelectionContext | null = null;
+  private readonly consumed = new ConsumedSelections<CanvasSelectionContext>(
+    selection => selection.canvasPath,
+    (left, right) => this.isSameCanvasSelection(left, right),
+  );
   private pollInterval: number | null = null;
 
   constructor(
@@ -68,23 +73,38 @@ export class CanvasSelectionController {
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
 
     if (nodeIds.length > 0) {
-      const sameSelection = this.storedSelection
-        && this.storedSelection.canvasPath === canvasPath
-        && this.storedSelection.nodeIds.length === nodeIds.length
-        && this.storedSelection.nodeIds.every(id => nodeIds.includes(id));
+      const next = { canvasPath, nodeIds };
+      if (this.consumed.isConsumed(next)) {
+        this.clearWhenInputIsNotFocused();
+        return;
+      }
 
-      if (!sameSelection) {
-        this.storedSelection = { canvasPath, nodeIds };
+      if (!this.isSameCanvasSelection(this.storedSelection, next)) {
+        this.storedSelection = next;
         this.updateIndicator();
         this.onUserSelectionChanged?.();
       }
-    } else if (!this.inputEl.contains(this.getActiveElement())) {
-      if (this.storedSelection) {
-        this.storedSelection = null;
-        this.updateIndicator();
-        this.onUserSelectionChanged?.();
-      }
+    } else {
+      this.consumed.release(canvasPath);
+      this.clearWhenInputIsNotFocused();
     }
+  }
+
+  private clearWhenInputIsNotFocused(): void {
+    if (!this.storedSelection || this.inputEl.contains(this.getActiveElement())) return;
+    this.storedSelection = null;
+    this.updateIndicator();
+    this.onUserSelectionChanged?.();
+  }
+
+  private isSameCanvasSelection(
+    stored: CanvasSelectionContext | null,
+    next: CanvasSelectionContext,
+  ): boolean {
+    return stored !== null
+      && stored.canvasPath === next.canvasPath
+      && stored.nodeIds.length === next.nodeIds.length
+      && stored.nodeIds.every(id => next.nodeIds.includes(id));
   }
 
   private getActiveElement(): Element | null {
@@ -116,7 +136,7 @@ export class CanvasSelectionController {
         icon: 'network',
         ariaLabel: label,
         onRemove: () => {
-          this.clear();
+          this.consumeSelection();
           this.onUserSelectionChanged?.();
         },
       }]);
@@ -140,6 +160,21 @@ export class CanvasSelectionController {
 
   hasSelection(): boolean {
     return this.storedSelection !== null;
+  }
+
+  /** Drops the current selection from the chat and ignores it until it changes on the canvas. */
+  consumeSelection(): void {
+    if (!this.storedSelection) return;
+    this.consumed.remember(this.storedSelection);
+    this.clear();
+  }
+
+  /** Puts a sent selection back in the composer unless a newer one was captured since. */
+  restoreSelection(context: CanvasSelectionContext | null | undefined): void {
+    if (this.storedSelection || !context?.nodeIds.length) return;
+    this.consumed.release(context.canvasPath);
+    this.storedSelection = { canvasPath: context.canvasPath, nodeIds: [...context.nodeIds] };
+    this.updateIndicator();
   }
 
   clear(): void {

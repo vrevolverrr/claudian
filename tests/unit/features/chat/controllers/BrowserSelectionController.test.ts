@@ -22,6 +22,7 @@ describe('BrowserSelectionController', () => {
   let containerEl: HTMLElement;
   let selectionText = 'selected web snippet';
   let getSelectionSpy: jest.SpyInstance;
+  let browserView: { currentUrl: string };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -46,6 +47,7 @@ describe('BrowserSelectionController', () => {
       containerEl,
       currentUrl: 'https://example.com',
     };
+    browserView = view;
 
     app = {
       workspace: {
@@ -144,6 +146,144 @@ describe('BrowserSelectionController', () => {
 
     expect(controller.hasSelection()).toBe(false);
     expect(contextTray.clearItems).toHaveBeenCalledWith('browser-selection');
+  });
+
+  describe('in a note that embeds a web page', () => {
+    let frame: HTMLIFrameElement;
+
+    beforeEach(() => {
+      frame = document.createElement('iframe');
+      containerEl.appendChild(frame);
+      document.body.appendChild(containerEl);
+      const noteView = {
+        getViewType: () => 'markdown',
+        getDisplayText: () => 'Ch7 B+ Tree (pilot)',
+        containerEl,
+      };
+      app.workspace.getMostRecentLeaf.mockReturnValue({ view: noteView });
+    });
+
+    afterEach(() => {
+      containerEl.remove();
+    });
+
+    it('leaves the note text selection to the editor', async () => {
+      controller.start();
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+
+      expect(controller.getContext()).toBeNull();
+    });
+
+    it('captures a selection inside the embedded page', async () => {
+      selectionText = '';
+      const frameDoc = frame.contentDocument!;
+      const frameAnchor = frameDoc.createElement('span');
+      frameDoc.body.appendChild(frameAnchor);
+      jest.spyOn(frameDoc, 'getSelection').mockReturnValue({
+        toString: () => 'figure caption',
+        anchorNode: frameAnchor,
+        focusNode: frameAnchor,
+      } as unknown as Selection);
+
+      controller.start();
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+
+      expect(controller.getContext()).toEqual(expect.objectContaining({
+        selectedText: 'figure caption',
+        title: 'Ch7 B+ Tree (pilot)',
+      }));
+    });
+  });
+
+  describe('consumed selections', () => {
+    async function poll(): Promise<void> {
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+    }
+
+    async function captureSelection(): Promise<void> {
+      controller.start();
+      await poll();
+      expect(controller.hasSelection()).toBe(true);
+    }
+
+    it('does not re-capture a consumed browser selection', async () => {
+      await captureSelection();
+
+      controller.consumeSelection();
+      expect(controller.hasSelection()).toBe(false);
+      expect(contextTray.clearItems).toHaveBeenCalledWith('browser-selection');
+      await poll();
+      await poll();
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures again after the page selection is cleared and reselected', async () => {
+      await captureSelection();
+      controller.consumeSelection();
+
+      selectionText = '';
+      await poll();
+      selectionText = 'selected web snippet';
+      await poll();
+
+      expect(controller.getContext()?.selectedText).toBe('selected web snippet');
+    });
+
+    it('does not bring back a sent selection after selecting on another page', async () => {
+      await captureSelection();
+      controller.consumeSelection();
+
+      browserView.currentUrl = 'https://other.example';
+      selectionText = 'other page text';
+      await poll();
+      expect(controller.getContext()?.selectedText).toBe('other page text');
+
+      browserView.currentUrl = 'https://example.com';
+      selectionText = 'selected web snippet';
+      await poll();
+
+      expect(controller.getContext()).toBeNull();
+    });
+
+    it('keeps a still-selected page out of the composer after tray remove', async () => {
+      await captureSelection();
+
+      contextTray.setItems.mock.calls.at(-1)![1][0].onRemove();
+      await poll();
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('restores a consumed browser selection', async () => {
+      await captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()).toEqual(sent);
+      expect(contextTray.setItems).toHaveBeenLastCalledWith('browser-selection', [
+        expect.objectContaining({ label: '1 line selected' }),
+      ]);
+      await poll();
+      expect(controller.getContext()).toEqual(sent);
+    });
+
+    it('does not replace a newer browser selection when restoring', async () => {
+      await captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+      selectionText = 'newer snippet';
+      await poll();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()?.selectedText).toBe('newer snippet');
+    });
   });
 
   it('handles polling errors without unhandled rejection', async () => {

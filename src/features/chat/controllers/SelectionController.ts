@@ -5,6 +5,7 @@ import { hideSelectionHighlight, showSelectionHighlight } from '../../../shared/
 import { type EditorSelectionContext, getEditorView } from '../../../utils/editor';
 import type { StoredSelection } from '../state/types';
 import type { ComposerContextTray } from '../ui/ComposerContextTray';
+import { ConsumedSelections } from './ConsumedSelections';
 
 const SELECTION_POLL_INTERVAL = 250;
 const INPUT_HANDOFF_GRACE_MS = 1500;
@@ -31,6 +32,10 @@ export class SelectionController {
   private onUserSelectionChanged: (() => void) | null;
   private owningLeaf: WorkspaceLeaf | null;
   private storedSelection: StoredSelection | null = null;
+  private readonly consumed = new ConsumedSelections<StoredSelection>(
+    selection => selection.editorView ?? selection.notePath,
+    (left, right) => this.isSameStoredSelection(left, right),
+  );
   private inputHandoffGraceUntil: number | null = null;
   private pollInterval: number | null = null;
   private readonly focusScopePointerDownHandler = () => {
@@ -136,6 +141,11 @@ export class SelectionController {
       const notePath = view.file?.path || 'unknown';
       const lineCount = selectedText.split(/\r?\n/).length;
 
+      if (this.consumed.isConsumed({ notePath, selectedText, lineCount, startLine, from, to, editorView })) {
+        this.handleDeselection();
+        return;
+      }
+
       const s = this.storedSelection;
       const sameRange = s
         && s.editorView === editorView
@@ -156,6 +166,7 @@ export class SelectionController {
         this.onUserSelectionChanged?.();
       }
     } else {
+      this.consumed.release(editorView);
       this.handleDeselection();
     }
   }
@@ -188,6 +199,7 @@ export class SelectionController {
 
     const selection = this.getDocumentSelection(containerEl.ownerDocument);
     const selectedText = selection?.toString() ?? '';
+    const notePath = view.file?.path || 'unknown';
 
     if (selectedText.trim()) {
       const anchorNode = selection?.anchorNode;
@@ -196,14 +208,19 @@ export class SelectionController {
         (!anchorNode || !containerEl.contains(anchorNode))
         && (!focusNode || !containerEl.contains(focusNode))
       ) {
+        this.consumed.release(notePath);
         this.handleDeselection();
         return;
       }
 
       this.inputHandoffGraceUntil = null;
-      const notePath = view.file?.path || 'unknown';
       const lineCount = selectedText.split(/\r?\n/).length;
       const domRanges = this.cloneDOMRanges(selection);
+
+      if (this.consumed.isConsumed({ notePath, selectedText, lineCount, domRanges })) {
+        this.handleDeselection();
+        return;
+      }
 
       const unchanged = this.storedSelection
         && this.storedSelection.editorView === undefined
@@ -219,6 +236,7 @@ export class SelectionController {
         this.onUserSelectionChanged?.();
       }
     } else {
+      this.consumed.release(notePath);
       this.handleDeselection();
     }
   }
@@ -431,7 +449,7 @@ export class SelectionController {
         icon: 'text-select',
         ariaLabel: label,
         onRemove: () => {
-          this.clear();
+          this.consumeSelection();
           this.onUserSelectionChanged?.();
         },
       }]);
@@ -462,6 +480,41 @@ export class SelectionController {
 
   hasSelection(): boolean {
     return this.storedSelection !== null;
+  }
+
+  /** Drops the current selection from the chat and ignores it until it changes in Obsidian. */
+  consumeSelection(): void {
+    if (!this.storedSelection) return;
+    this.consumed.remember(this.storedSelection);
+    this.clear();
+  }
+
+  /** Puts a sent selection back in the composer unless a newer one was captured since. */
+  restoreSelection(context: EditorSelectionContext | null | undefined): void {
+    if (this.storedSelection || context?.mode !== 'selection' || !context.selectedText) return;
+    const consumed = this.consumed.take(selection => (
+      selection.notePath === context.notePath && selection.selectedText === context.selectedText
+    ));
+    this.storedSelection = consumed ?? {
+        notePath: context.notePath,
+        selectedText: context.selectedText,
+        lineCount: context.lineCount ?? context.selectedText.split(/\r?\n/).length,
+        ...(context.startLine !== undefined && { startLine: context.startLine }),
+      };
+    this.updateIndicator();
+    this.showHighlight();
+  }
+
+  private isSameStoredSelection(left: StoredSelection, right: StoredSelection): boolean {
+    if (left.notePath !== right.notePath || left.selectedText !== right.selectedText) {
+      return false;
+    }
+    if (left.editorView || right.editorView) {
+      return left.editorView === right.editorView
+        && left.from === right.from
+        && left.to === right.to;
+    }
+    return this.rangeListsMatch(left.domRanges, right.domRanges ?? []);
   }
 
   // ============================================

@@ -311,6 +311,39 @@
   color: inherit;
 }
 
+/* Reply-style quote of the selections a user message was sent with */
+.claudian-selection-quotes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.claudian-selection-quote {
+  min-width: 0;
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid var(--interactive-accent);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.claudian-selection-quote-source {
+  display: block;
+  overflow: hidden;
+  font-weight: var(--font-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudian-selection-quote-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Text selection in user messages - visible highlight */
 .claudian-message-user ::selection {
   background: rgba(255, 255, 255, 0.35);

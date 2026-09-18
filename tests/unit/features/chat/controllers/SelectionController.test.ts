@@ -392,6 +392,152 @@ describe('SelectionController', () => {
     expect(hideSelectionHighlight).toHaveBeenCalledWith(editorView);
   });
 
+  describe('consumed selections', () => {
+    function captureSelection() {
+      controller.start();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(true);
+    }
+
+    it('does not re-capture a consumed source selection while it stays selected', () => {
+      captureSelection();
+
+      controller.consumeSelection();
+      expect(controller.hasSelection()).toBe(false);
+      expect(contextTray.clearItems).toHaveBeenCalledWith('editor-selection');
+
+      jest.advanceTimersByTime(500);
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures a different source selection after consuming one', () => {
+      captureSelection();
+      controller.consumeSelection();
+
+      editor.getSelection.mockReturnValue('other text');
+      editor.getCursor.mockImplementation((which: 'from' | 'to') => (
+        which === 'from' ? { line: 2, ch: 0 } : { line: 2, ch: 10 }
+      ));
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toEqual({
+        notePath: 'notes/test.md',
+        mode: 'selection',
+        selectedText: 'other text',
+        lineCount: 1,
+        startLine: 3,
+      });
+    });
+
+    it('captures the same text again after it was deselected', () => {
+      captureSelection();
+      controller.consumeSelection();
+
+      editor.getSelection.mockReturnValue('');
+      jest.advanceTimersByTime(250);
+      editor.getSelection.mockReturnValue('selected text');
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(true);
+    });
+
+    it('keeps ignoring a consumed selection while another note has no selection', () => {
+      captureSelection();
+      const originalView = app.workspace.getActiveViewOfType();
+      controller.consumeSelection();
+
+      const otherEditorView = { ...editorView, id: 'other-editor-view', dom: createMockEventTarget() };
+      app.workspace.getActiveViewOfType.mockReturnValue({
+        editor: { ...editor, getSelection: jest.fn().mockReturnValue(''), cm: otherEditorView },
+        getMode: () => 'source',
+        file: { path: 'notes/other.md' },
+      });
+      jest.advanceTimersByTime(250);
+
+      app.workspace.getActiveViewOfType.mockReturnValue(originalView);
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('does not bring back a sent selection after selecting in another note', () => {
+      captureSelection();
+      const originalView = app.workspace.getActiveViewOfType();
+      controller.consumeSelection();
+
+      const otherEditorView = { ...editorView, id: 'other-editor-view', dom: createMockEventTarget() };
+      app.workspace.getActiveViewOfType.mockReturnValue({
+        editor: { ...editor, getSelection: jest.fn().mockReturnValue('other note text'), cm: otherEditorView },
+        getMode: () => 'source',
+        file: { path: 'notes/other.md' },
+      });
+      jest.advanceTimersByTime(250);
+      expect(controller.getContext()?.selectedText).toBe('other note text');
+
+      app.workspace.getActiveViewOfType.mockReturnValue(originalView);
+      jest.advanceTimersByTime(250);
+
+      expect(controller.getContext()).toBeNull();
+    });
+
+    it('keeps a still-selected source range out of the composer after tray remove', () => {
+      captureSelection();
+
+      contextTray.setItems.mock.calls.at(-1)![1][0].onRemove();
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('restores a consumed selection with its highlight', () => {
+      captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+      contextTray.setItems.mockClear();
+      (showSelectionHighlight as jest.Mock).mockClear();
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()).toEqual(sent);
+      expect(contextTray.setItems).toHaveBeenLastCalledWith('editor-selection', [
+        expect.objectContaining({ label: '1 line selected' }),
+      ]);
+      expect(showSelectionHighlight).toHaveBeenCalledWith(editorView, 0, 4);
+
+      jest.advanceTimersByTime(250);
+      expect(controller.getContext()).toEqual(sent);
+    });
+
+    it('restores a selection this controller did not consume from its context', () => {
+      const context = {
+        notePath: 'notes/old.md',
+        mode: 'selection' as const,
+        selectedText: 'old text',
+        lineCount: 1,
+        startLine: 7,
+      };
+
+      controller.restoreSelection(context);
+
+      expect(controller.getContext()).toEqual(context);
+      expect(contextTray.setItems).toHaveBeenLastCalledWith('editor-selection', [
+        expect.objectContaining({ label: '1 line selected' }),
+      ]);
+    });
+
+    it('does not replace a newer selection when restoring', () => {
+      captureSelection();
+      const sent = controller.getContext();
+      controller.consumeSelection();
+      editor.getSelection.mockReturnValue('newer text');
+      jest.advanceTimersByTime(250);
+
+      controller.restoreSelection(sent);
+
+      expect(controller.getContext()?.selectedText).toBe('newer text');
+    });
+  });
+
   describe('Reading mode (preview)', () => {
     let readingView: any;
     let containerEl: any;
@@ -656,6 +802,43 @@ describe('SelectionController', () => {
         'claudian-selection',
         { ranges: [secondRange] },
       );
+    });
+
+    it('does not re-capture a consumed reading-mode selection', () => {
+      const anchorNode = {};
+      const range = createMockDOMRange({ startOffset: 2, endOffset: 9 });
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn(() => createMockDOMSelection('reading selection', anchorNode, undefined, range)),
+      };
+      controller.start();
+      jest.advanceTimersByTime(250);
+      expect(controller.hasSelection()).toBe(true);
+
+      controller.consumeSelection();
+      jest.advanceTimersByTime(500);
+
+      expect(controller.hasSelection()).toBe(false);
+    });
+
+    it('captures a consumed reading-mode selection again after it was cleared', () => {
+      const anchorNode = {};
+      const range = createMockDOMRange({ startOffset: 2, endOffset: 9 });
+      let selectedText = 'reading selection';
+      (global as any).document = {
+        activeElement: null,
+        getSelection: jest.fn(() => createMockDOMSelection(selectedText, anchorNode, undefined, range)),
+      };
+      controller.start();
+      jest.advanceTimersByTime(250);
+      controller.consumeSelection();
+
+      selectedText = '';
+      jest.advanceTimersByTime(250);
+      selectedText = 'reading selection';
+      jest.advanceTimersByTime(250);
+
+      expect(controller.hasSelection()).toBe(true);
     });
 
     it('ignores selection outside the view container', () => {

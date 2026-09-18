@@ -2,6 +2,7 @@ import { Notice, setIcon } from 'obsidian';
 
 import type { ComposerInputElement } from '@/shared/composer-dropdown/types';
 
+import { CONVERSATION_INPUT_LEDGER_SCHEMA_VERSION } from '../../../core/bootstrap/ConversationInputLedgerStorage';
 import {
   type BuiltInCommand,
   detectBuiltInCommand,
@@ -21,6 +22,8 @@ import { TOOL_EXIT_PLAN_MODE } from '../../../core/tools/toolNames';
 import {
   type ApprovalDecision,
   type ChatMessage,
+  type ExecutionInputContextSnapshot,
+  type ExecutionInputSnapshot,
   type ExitPlanModeDecision,
   type ExitPlanModePresentationOptions,
   isCanonicalUserMessage,
@@ -161,6 +164,7 @@ interface PendingProviderUserMessage {
   persistedContent?: string;
   linkedContentPath?: string;
   images?: ChatMessage['images'];
+  executionInput?: ExecutionInputSnapshot;
 }
 
 type PendingSteerProviderDisposition =
@@ -354,6 +358,7 @@ export class InputController {
         browserContextOverride: browserContext,
         canvasContextOverride: canvasContext,
       });
+      this.consumeSelections();
       state.queuedMessage = this.mergeQueuedMessages(
         state.queuedMessage,
         this.createQueuedMessage(displayContent, turnRequest),
@@ -418,10 +423,15 @@ export class InputController {
         browserContextOverride: options?.browserContextOverride,
         canvasContextOverride: options?.canvasContextOverride,
       });
+    // A request replayed from the queue already dropped its selections when it was queued.
+    if (!options?.turnRequestOverride) {
+      this.consumeSelections();
+    }
     const { displayContent, turnRequest } = turnSubmission;
     const messagesBeforeTurn = state.messages;
     const hadPendingConversationSave = state.hasPendingConversationSave;
 
+    const selectionInput = toSelectionInputSnapshot(turnRequest);
     const userMsg: ChatMessage = {
       id: this.deps.generateId(),
       role: 'user',
@@ -429,6 +439,7 @@ export class InputController {
       displayContent,                // Original user input (for UI display)
       timestamp: Date.now(),
       images: imagesForMessage,
+      ...(selectionInput ? { executionInput: selectionInput } : {}),
     };
     state.addMessage(userMsg);
     state.hasPendingConversationSave = true;
@@ -891,6 +902,7 @@ export class InputController {
     if (imageContextManager && (!options.mergeWithComposer || restoredImages.length > 0)) {
       imageContextManager.setImages(restoredImages);
     }
+    this.restoreSelections(this.toQueuedChatTurn(message).request);
     inputEl.focus();
   }
 
@@ -989,6 +1001,19 @@ export class InputController {
 
   private clearDeferredReviewableSettlement(): void {
     this.deferredReviewableSettlement = null;
+  }
+
+  /** Drops just-captured selections from the composer without touching Obsidian's own selection. */
+  private consumeSelections(): void {
+    this.deps.selectionController.consumeSelection();
+    this.deps.browserSelectionController?.consumeSelection();
+    this.deps.canvasSelectionController.consumeSelection();
+  }
+
+  private restoreSelections(request: ChatTurnRequest): void {
+    this.deps.selectionController.restoreSelection(request.editorSelection);
+    this.deps.browserSelectionController?.restoreSelection(request.browserSelection);
+    this.deps.canvasSelectionController.restoreSelection(request.canvasSelection);
   }
 
   private buildTurnSubmission(options: {
@@ -1384,6 +1409,7 @@ export class InputController {
           ? undefined
           : request.linkedContentPath,
         images: request.images,
+        executionInput: toSelectionInputSnapshot(request),
       },
       inputRecordId: submission.inputRecordId,
       message: queuedMessage,
@@ -1516,6 +1542,7 @@ export class InputController {
         timestamp: Date.now(),
         linkedContentPath: expected?.linkedContentPath,
         images,
+        ...(expected?.executionInput ? { executionInput: expected.executionInput } : {}),
         ...(chunk.itemId ? { userMessageId: chunk.itemId } : {}),
       };
       this.deps.state.addMessage(userMessage);
@@ -2336,6 +2363,21 @@ function cloneChatTurnRequest(request: ChatTurnRequest): ChatTurnRequest {
   };
 }
 
+/** The selections a user message carried, in the shape the input ledger records for it. */
+function toSelectionInputSnapshot(request: ChatTurnRequest): ExecutionInputSnapshot | undefined {
+  const context: ExecutionInputContextSnapshot = {
+    ...(request.editorSelection ? { editorSelection: request.editorSelection } : {}),
+    ...(request.browserSelection ? { browserSelection: request.browserSelection } : {}),
+    ...(request.canvasSelection ? { canvasSelection: request.canvasSelection } : {}),
+  };
+  if (Object.keys(context).length === 0) return undefined;
+  return {
+    schemaVersion: CONVERSATION_INPUT_LEDGER_SCHEMA_VERSION,
+    canonicalText: request.text,
+    context,
+  };
+}
+
 function mergeQueuedChatTurns(
   existing: { displayContent: string; request: ChatTurnRequest },
   incoming: { displayContent: string; request: ChatTurnRequest },
@@ -2357,6 +2399,10 @@ function mergeQueuedChatTurns(
       ...cloneChatTurnRequest(incoming.request),
       linkedContentPath:
         incoming.request.linkedContentPath ?? existing.request.linkedContentPath,
+      // The first message consumed its selections, so a later one usually carries none.
+      editorSelection: incoming.request.editorSelection ?? existing.request.editorSelection,
+      browserSelection: incoming.request.browserSelection ?? existing.request.browserSelection,
+      canvasSelection: incoming.request.canvasSelection ?? existing.request.canvasSelection,
       externalContextPaths:
         externalContextPaths.length > 0 ? externalContextPaths : undefined,
       images: images.length > 0 ? images : undefined,
