@@ -148,6 +148,55 @@ describe('BrowserSelectionController', () => {
     expect(contextTray.clearItems).toHaveBeenCalledWith('browser-selection');
   });
 
+  describe('in a note that embeds a web page', () => {
+    let frame: HTMLIFrameElement;
+
+    beforeEach(() => {
+      frame = document.createElement('iframe');
+      containerEl.appendChild(frame);
+      document.body.appendChild(containerEl);
+      const noteView = {
+        getViewType: () => 'markdown',
+        getDisplayText: () => 'Ch7 B+ Tree (pilot)',
+        containerEl,
+      };
+      app.workspace.getMostRecentLeaf.mockReturnValue({ view: noteView });
+    });
+
+    afterEach(() => {
+      containerEl.remove();
+    });
+
+    it('leaves the note text selection to the editor', async () => {
+      controller.start();
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+
+      expect(controller.getContext()).toBeNull();
+    });
+
+    it('captures a selection inside the embedded page', async () => {
+      selectionText = '';
+      const frameDoc = frame.contentDocument!;
+      const frameAnchor = frameDoc.createElement('span');
+      frameDoc.body.appendChild(frameAnchor);
+      jest.spyOn(frameDoc, 'getSelection').mockReturnValue({
+        toString: () => 'figure caption',
+        anchorNode: frameAnchor,
+        focusNode: frameAnchor,
+      } as unknown as Selection);
+
+      controller.start();
+      jest.advanceTimersByTime(250);
+      await flushMicrotasks();
+
+      expect(controller.getContext()).toEqual(expect.objectContaining({
+        selectedText: 'figure caption',
+        title: 'Ch7 B+ Tree (pilot)',
+      }));
+    });
+  });
+
   describe('consumed selections', () => {
     async function poll(): Promise<void> {
       jest.advanceTimersByTime(250);

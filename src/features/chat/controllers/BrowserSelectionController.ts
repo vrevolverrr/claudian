@@ -63,7 +63,7 @@ export class BrowserSelectionController {
         return;
       }
 
-      const selectedText = await this.extractSelectedText(browserView.containerEl);
+      const selectedText = await this.extractSelectedText(browserView.containerEl, browserView.isBrowserView);
       if (selectedText) {
         const nextContext = this.buildContext(browserView.view, browserView.viewType, browserView.containerEl, selectedText);
         if (this.consumed.isConsumed(nextContext)) {
@@ -87,35 +87,37 @@ export class BrowserSelectionController {
     }
   }
 
-  private getActiveBrowserView(): { view: ItemView; viewType: string; containerEl: HTMLElement } | null {
+  private getActiveBrowserView(): {
+    view: ItemView;
+    viewType: string;
+    containerEl: HTMLElement;
+    isBrowserView: boolean;
+  } | null {
     const activeLeaf = this.app.workspace.getMostRecentLeaf?.();
     const activeView = activeLeaf?.view as ItemView | undefined;
     const containerEl = (activeView as unknown as { containerEl?: HTMLElement }).containerEl;
     if (!activeView || !containerEl) return null;
 
     const viewType = activeView.getViewType?.() ?? '';
-    if (!this.isBrowserLikeView(viewType, containerEl)) return null;
+    const isBrowserView = this.isBrowserViewType(viewType);
+    if (!isBrowserView && !containerEl.querySelector('iframe, webview')) return null;
 
-    return { view: activeView, viewType, containerEl };
+    return { view: activeView, viewType, containerEl, isBrowserView };
   }
 
-  private isBrowserLikeView(viewType: string, containerEl: HTMLElement): boolean {
+  private isBrowserViewType(viewType: string): boolean {
     const normalized = viewType.toLowerCase();
-    if (
-      normalized.includes('surfing')
+    return normalized.includes('surfing')
       || normalized.includes('browser')
-      || normalized.includes('webview')
-    ) {
-      return true;
-    }
-
-    return Boolean(containerEl.querySelector('iframe, webview'));
+      || normalized.includes('webview');
   }
 
-  private async extractSelectedText(containerEl: HTMLElement): Promise<string | null> {
-    const ownerDoc = containerEl.ownerDocument;
-    const docSelection = this.extractSelectionFromDocument(ownerDoc, containerEl);
-    if (docSelection) return docSelection;
+  /** A non-browser view hosting a frame (a note embedding HTML) owns its own text; only the frame counts. */
+  private async extractSelectedText(containerEl: HTMLElement, isBrowserView: boolean): Promise<string | null> {
+    if (isBrowserView) {
+      const docSelection = this.extractSelectionFromDocument(containerEl.ownerDocument, containerEl);
+      if (docSelection) return docSelection;
+    }
 
     const frameSelection = this.extractSelectionFromIframes(containerEl);
     if (frameSelection) return frameSelection;
